@@ -6,13 +6,35 @@
 import { initializeApp } from 'firebase/app';
 import { initializeFirestore, setLogLevel } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import firebaseConfig from '../firebase-applet-config.json';
 
 // Set logging level to prevent internal stream reconnect notices
 setLogLevel('error');
 
+const localConfigs = import.meta.glob('../firebase-applet-config.json', { eager: true }) as Record<
+  string,
+  { default?: Record<string, any> } | Record<string, any>
+>;
+const fileModule = Object.values(localConfigs)[0];
+const fileConfig: Record<string, any> =
+  (fileModule && typeof fileModule === 'object' && 'default' in fileModule ? fileModule.default : fileModule) || {};
+
+const envConfig: Record<string, any> = {
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+};
+
+const firebaseConfig: Record<string, any> = {
+  ...fileConfig,
+  ...Object.fromEntries(Object.entries(envConfig).filter(([, value]) => Boolean(value))),
+};
+
 const app = initializeApp(firebaseConfig);
-const rawDbId = (firebaseConfig as any).firestoreDatabaseId;
+const rawDbId = firebaseConfig.firestoreDatabaseId;
 const dbId = (
   firebaseConfig.projectId !== 'simba-c6ad8' &&
   rawDbId &&

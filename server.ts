@@ -31,13 +31,25 @@ const PORT = Number(process.env.PORT) || 3000;
 const app = express();
 app.use(express.json());
 
-// 1. Initialize Firebase inside Node using credentials from the applet config file
+// 1. Initialize Firebase inside Node using env vars or optional local applet config file
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-let firebaseConfig: any = {};
+let fileFirebaseConfig: Record<string, any> = {};
 if (fs.existsSync(configPath)) {
-  firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-} else {
-  console.warn('Warning: firebase-applet-config.json not found. Database features may fail.');
+  fileFirebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+}
+
+const firebaseConfig: Record<string, any> = {
+  projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || fileFirebaseConfig.projectId,
+  appId: process.env.FIREBASE_APP_ID || process.env.VITE_FIREBASE_APP_ID || fileFirebaseConfig.appId,
+  apiKey: process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || fileFirebaseConfig.apiKey,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || process.env.VITE_FIREBASE_AUTH_DOMAIN || fileFirebaseConfig.authDomain,
+  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID || fileFirebaseConfig.firestoreDatabaseId,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || fileFirebaseConfig.storageBucket,
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || fileFirebaseConfig.messagingSenderId,
+};
+
+if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
+  console.warn('Warning: Firebase config not found in env vars or firebase-applet-config.json. Database features may fail.');
 }
 
 const firebaseApp = initializeApp(firebaseConfig);
