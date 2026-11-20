@@ -4,7 +4,7 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/((?!api/|assets/|alarm_.*\\.mp3).*)",
+      "source": "/((?!api/|3d/|assets/|alarm_.*\\.mp3).*)",
       "destination": "/index.html"
     }
   ]

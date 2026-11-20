@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Curve } from 'recharts';
 import { Map2D } from './CiliwungHardwareLiveView';
-import Ciliwung3DMap from './Ciliwung3DMap';
+import CiliwungOfficial3DView from './CiliwungOfficial3DView';
 import graphScale from './ciliwung-graph-scale.json';
 
 type ScenarioId = 'ringan' | 'sedang' | 'lebat';
@@ -173,6 +173,10 @@ export default function CiliwungSimulationPage({
   }, [onAlertStatusChange]);
 
   const apiBase = typeof window !== 'undefined' ? window.location.origin : '';
+
+  const handleSelectNode = (nodeId: string) => {
+    setGraphNodeId(nodeId);
+  };
 
   useEffect(() => {
     let active = true;
@@ -868,29 +872,39 @@ export default function CiliwungSimulationPage({
             ))}
           </div>
 
-          {activeView === 'map2d' ? (
+          {activeView === 'map2d' && (
             <Map2D compact fillHeight simulation extraNodes={SIMULATION_UPSTREAM} fallbackLevel={null} config={{}} snapshot={map2dSnapshot} />
-          ) : activeView === 'map3d' ? (
-            <section className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-3 lg:p-5 flex flex-1 flex-col gap-3`}>
+          )}
+
+          {activeView === 'map3d' && (
+            <section
+              className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-3 lg:p-5 flex flex-1 flex-col gap-3`}
+            >
               <div className={`flex items-center justify-between px-2 text-[10px] font-mono uppercase tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                <span>{en ? 'Ciliwung 3D Digital Twin (UP1 Puncak → Laut Jawa)' : 'Simulasi 3D DAS Ciliwung (UP1 Puncak → Laut Jawa)'}</span>
+                <span>{en ? 'Ciliwung 3D Flood Explorer (UP1 Puncak → Java Sea)' : 'Visualisasi 3D DAS Ciliwung (UP1 Puncak → Laut Jawa)'}</span>
                 <span>{state?.runId ? `run ${state.runId.slice(0, 8)}` : 'idle'}</span>
               </div>
-              <Ciliwung3DMap
-                mode="simulation"
-                nodes={state?.threeDNodes ?? []}
-                forecasts={forecasts}
-                theme={theme}
-                language={language}
-                selectedNodeId={graphNodeId}
-                onSelectNode={(id) => {
-                  if (MAIN_GRAPH_NODES.includes(id)) setGraphNodeId(id);
-                }}
-                isLive={isRunning}
-                heightClassName="h-[clamp(380px,62vh,640px)]"
-              />
+              <div
+                className={`relative flex-1 w-full overflow-hidden rounded-xl border ${
+                  isDark ? 'border-white/10 bg-[#101916]' : 'border-slate-200 bg-[#b9d2d5]'
+                }`}
+              >
+                <CiliwungOfficial3DView
+                  mode="simulation"
+                  nodes={state?.threeDNodes ?? []}
+                  selectedNodeId={graphNodeId}
+                  onSelectNode={setGraphNodeId}
+                  isLive={isRunning || state?.status === 'completed'}
+                  simTimeSeconds={state?.simTimeSeconds ?? 0}
+                  theme={theme}
+                  language={language}
+                  heightClassName="h-[clamp(420px,64vh,680px)] lg:h-full lg:min-h-[560px]"
+                />
+              </div>
             </section>
-          ) : (
+          )}
+
+          {activeView === 'graph' && (
             <section className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-5 lg:p-6 flex flex-1 flex-col justify-between`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -1093,7 +1107,7 @@ export default function CiliwungSimulationPage({
                   key={node.id}
                   type="button"
                   aria-pressed={graphNodeId === node.id}
-                  onClick={() => setGraphNodeId(node.id)}
+                  onClick={() => handleSelectNode(node.id)}
                   data-testid={`simulation-node-${node.id}`}
                   className={`w-full rounded-xl border px-3 py-2 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
                     graphNodeId === node.id

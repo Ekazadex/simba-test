@@ -1296,6 +1296,27 @@ app.post('/api/ciliwung-mode', async (req, res) => {
 
 // Serve static assets and mount Vite middleware
 async function startServer() {
+  const public3dPath = path.join(process.cwd(), 'public', '3d');
+  const dist3dPath = path.join(process.cwd(), 'dist', '3d');
+  const viewer3dPath = process.env.NODE_ENV === 'production' && fs.existsSync(dist3dPath) ? dist3dPath : public3dPath;
+
+  if (fs.existsSync(viewer3dPath)) {
+    app.use(
+      '/3d',
+      express.static(viewer3dPath, {
+        etag: true,
+        setHeaders: (res, filePath) => {
+          const ext = path.extname(filePath).toLowerCase();
+          if (ext === '.html' || ext === '.js' || ext === '.css') {
+            res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+          } else {
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+          }
+        },
+      })
+    );
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

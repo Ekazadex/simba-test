@@ -16,7 +16,7 @@ import {
   interpolateGraphPoints,
 } from '../hardware-graph.mjs';
 import { projectDownstreamLevel } from '../demo-estimates.mjs';
-import Ciliwung3DMap from './Ciliwung3DMap';
+import CiliwungOfficial3DView from './CiliwungOfficial3DView';
 
 setWorkerUrl(workerUrl);
 
@@ -1426,8 +1426,12 @@ export default function CiliwungHardwareLiveView({
         return [];
       }
     }
-    return snapshot?.threeDNodes ?? [];
-  }, [currentNodes, fallbackLevel, config.threshold_siaga, config.threshold_bahaya, snapshot?.threeDNodes]);
+    return [];
+  }, [currentNodes, fallbackLevel, config.threshold_siaga, config.threshold_bahaya]);
+
+  const focus3DNode = (nodeId: string) => {
+    setGraphNodeId(nodeId);
+  };
 
   return (
     <section
@@ -1609,24 +1613,48 @@ export default function CiliwungHardwareLiveView({
         )}
 
         {activeView === 'map3d' && (
-          <div data-testid="hardware-map3d" className="space-y-2.5">
-            <p className="text-xs opacity-75">
-              {en
-                ? 'Interactive 3D corridor from Pos Depok (N1 · ESP32 Real Sensor) to Pintu Air Manggarai (N5). Drag to orbit, scroll to zoom, or click any monitoring pier.'
-                : 'Simulasi 3D interaktif koridor Ciliwung dari Pos Depok (N1 · Sensor ESP32) hingga Pintu Air Manggarai (N5). Geser untuk memutar sudut pandang, zoom, atau klik tiang pos pantau.'}
-            </p>
-            <Ciliwung3DMap
-              mode="hardware"
-              nodes={effective3DNodes}
-              theme={theme}
-              language={language}
-              selectedNodeId={graphNodeId}
-              onSelectNode={(id) => {
-                if (GRAPH_NODES.some((n) => n.id === id)) setGraphNodeId(id);
-              }}
-              isLive={isLive || fallbackLevel != null}
-              heightClassName="h-[clamp(360px,58vh,620px)]"
-            />
+          <div data-testid="hardware-map3d" className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs opacity-75">
+                {en
+                  ? 'Self-hosted 3D Ciliwung SRTM & OSM corridor from Pos Depok (N1 · ESP32) to Pintu Air Manggarai (N5) and Java Sea.'
+                  : 'Visualisasi 3D resmi DAS Ciliwung (SRTM & OSM) dari Pos Depok (N1 · ESP32) hingga Pintu Air Manggarai (N5) dan Laut Jawa.'}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {GRAPH_NODES.map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    onClick={() => focus3DNode(node.id)}
+                    className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                      graphNodeId === node.id
+                        ? 'border-blue-500 bg-blue-500/15 text-blue-400'
+                        : isDark
+                          ? 'border-white/10 bg-white/5 text-slate-300 hover:border-blue-400/50'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400/50'
+                    }`}
+                  >
+                    {node.id} · {node.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div
+              className={`relative w-full overflow-hidden rounded-2xl border shadow-xl ${
+                isDark ? 'border-white/10 bg-[#101916]' : 'border-slate-200 bg-[#b9d2d5]'
+              }`}
+            >
+              <CiliwungOfficial3DView
+                mode="hardware"
+                nodes={effective3DNodes}
+                selectedNodeId={graphNodeId}
+                onSelectNode={setGraphNodeId}
+                isLive={isLive}
+                isSimulatedHardware={simulated}
+                theme={theme}
+                language={language}
+              />
+            </div>
           </div>
         )}
       </div>
