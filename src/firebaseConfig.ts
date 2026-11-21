@@ -6,17 +6,10 @@
 import { initializeApp } from 'firebase/app';
 import { initializeFirestore, setLogLevel } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import fileConfig from '../firebase-applet-config.json';
 
 // Set logging level to prevent internal stream reconnect notices
 setLogLevel('error');
-
-const localConfigs = import.meta.glob('../firebase-applet-config.json', { eager: true }) as Record<
-  string,
-  { default?: Record<string, any> } | Record<string, any>
->;
-const fileModule = Object.values(localConfigs)[0];
-const fileConfig: Record<string, any> =
-  (fileModule && typeof fileModule === 'object' && 'default' in fileModule ? fileModule.default : fileModule) || {};
 
 const envConfig: Record<string, any> = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -29,7 +22,7 @@ const envConfig: Record<string, any> = {
 };
 
 const firebaseConfig: Record<string, any> = {
-  ...fileConfig,
+  ...(fileConfig as Record<string, any>),
   ...Object.fromEntries(Object.entries(envConfig).filter(([, value]) => Boolean(value))),
 };
 

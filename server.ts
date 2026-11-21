@@ -21,6 +21,7 @@ import { createCupCarbonTelemetryListener } from './backend/ciliwung/cupcarbon-t
 import { sendForecastCupCarbon } from './backend/ciliwung/forecast-udp.mjs';
 import { createWeatherContextHandler } from './backend/ciliwung/weather-context.mjs';
 import { normalizeReading } from './src/normalize-reading.mjs';
+import { runLstmForecast } from './src/ml/lstmEngine.ts';
 
 dotenv.config();
 
@@ -531,166 +532,198 @@ function translateConditionToEn(c: string): string {
   return map[c] || c;
 }
 
-// Get live local weather information card data utilizing real-time official BMKG API with Open-Meteo fallback
-app.get('/api/live-weather', async (req, res) => {
-  const isEn = (req.query.lang as string) === 'en' || (req.query.language as string) === 'en';
-  let temp = 32;
-  let humidity = 45;
-  let precip: string | number = "0 mm";
-  let condition = "Cerah";
-  let windSpeed = 6.7;
-  let windDir = "Selatan ↑";
-  let visibilityVal: string | number = "< 9 km";
-  let weatherIcon = "";
-  let locationName = "Pondok Cina, Beji, Kota Depok";
-  let lastUpdated = new Date().toLocaleTimeString(isEn ? 'en-US' : 'id-ID', { hour: '2-digit', minute: '2-digit' }) + (isEn ? ' WIB' : ' WIB');
-  let isFromBMKG = false;
+// Helper to format a Date or ISO string in Asia/Jakarta (WIB)
+function formatWibTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const hh = parts.find((p) => p.type === 'hour')?.value || '00';
+  const mm = parts.find((p) => p.type === 'minute')?.value || '00';
+  return `${hh}.${mm} WIB`;
+}
 
-  // List of subdistrict adm4 codes for Depok Beji region requested by the user
+function parseBmkgLocalDatetime(localDt: string, isEn: boolean): { hourWib: string; dateLabel: string; fullLabel: string } {
+  // BMKG local_datetime format: "2026-11-20 22:00:00" (already in Asia/Jakarta WIB)
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(localDt || '');
+  if (!match) {
+    return { hourWib: '—', dateLabel: '', fullLabel: localDt || '—' };
+  }
+  const [, year, monthStr, dayStr, hh, mm] = match;
+  const monthIdx = Math.max(0, Math.min(11, Number(monthStr) - 1));
+  const monthsId = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  const monthsEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthName = (isEn ? monthsEn : monthsId)[monthIdx];
+  const dayNum = Number(dayStr);
+  const hourWib = `${hh}.${mm} WIB`;
+  const dateLabel = `${dayNum} ${monthName}`;
+  return {
+    hourWib,
+    dateLabel,
+    fullLabel: `${dayNum} ${monthName} ${year}, ${hourWib}`,
+  };
+}
+
+// Get live local weather directly from official BMKG Public API (no fabricated values or synthetic prose)
+app.get('/api/live-weather', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const isEn = (req.query.lang as string) === 'en' || (req.query.language as string) === 'en';
+  const fetchedAtWib = formatWibTime(new Date());
+
+  // Official BMKG ADM4 endpoints for Beji, Kota Depok (Pondok Cina primary, Kukusan & Beji fallback)
   const bmkgUrls = [
     'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1005', // Pondok Cina
     'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1006', // Kukusan
     'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1002'  // Beji
   ];
 
-  // Step 1: Try to fetch directly from BMKG API
+  // Step 1: Fetch verbatim data directly from BMKG public API
   for (const url of bmkgUrls) {
     try {
-      console.log(`[API] Fetching real-time weather from BMKG: ${url}`);
-      const bmkgRes = await fetch(url);
-      if (bmkgRes.ok) {
-        const bmkgData = await bmkgRes.json();
-        if (bmkgData && bmkgData.data && bmkgData.data[0] && bmkgData.data[0].cuaca) {
-          const flatCuaca = bmkgData.data[0].cuaca.flat();
-          if (flatCuaca.length > 0) {
-            // Find forecast closest to current local time
-            const now = new Date();
-            let closestItem = flatCuaca[0];
-            let minDiff = Infinity;
-            
-            for (const item of flatCuaca) {
-              const itemDate = new Date(item.datetime || item.local_datetime);
-              const diff = Math.abs(itemDate.getTime() - now.getTime());
-              if (diff < minDiff) {
-                minDiff = diff;
-                closestItem = item;
-              }
-            }
+      const bmkgRes = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!bmkgRes.ok) continue;
 
-            temp = closestItem.t;
-            humidity = closestItem.hu;
-            precip = `${closestItem.tp || 0} mm`;
-            condition = closestItem.weather_desc;
-            windSpeed = closestItem.ws;
-            windDir = getBMKGWindDirection(closestItem.wd);
-            visibilityVal = closestItem.vs_text || (closestItem.vs ? `< ${Math.ceil(closestItem.vs / 1000)} km` : '< 10 km');
-            weatherIcon = closestItem.image || '';
-            
-            if (bmkgData.lokasi) {
-              locationName = `${bmkgData.lokasi.desa}, ${bmkgData.lokasi.kecamatan}, ${bmkgData.lokasi.kotkab}`;
-            }
-            
-            isFromBMKG = true;
-            console.log(`[API] BMKG direct success for ${locationName}. Temp: ${temp}°C, Humidity: ${humidity}%, Wind: ${windSpeed} km/h, Condition: ${condition}`);
-            break;
-          }
+      const bmkgData = await bmkgRes.json();
+      const rawGroups = bmkgData?.data?.[0]?.cuaca;
+      if (!Array.isArray(rawGroups)) continue;
+
+      const flatCuaca = rawGroups.flat().filter((item: any) => item && typeof item.t === 'number');
+      if (flatCuaca.length === 0) continue;
+
+      // Pick the BMKG forecast slot closest to current UTC instant
+      const nowMs = Date.now();
+      let closestIdx = 0;
+      let minDiff = Infinity;
+
+      for (let i = 0; i < flatCuaca.length; i++) {
+        const item = flatCuaca[i];
+        const parsedMs = item.datetime
+          ? Date.parse(item.datetime)
+          : Date.parse(`${String(item.local_datetime || '').replace(' ', 'T')}+07:00`);
+        if (Number.isNaN(parsedMs)) continue;
+        const diff = Math.abs(parsedMs - nowMs);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestIdx = i;
         }
       }
+
+      const currentSlot = flatCuaca[closestIdx];
+      const slotTime = parseBmkgLocalDatetime(currentSlot.local_datetime || '', isEn);
+
+      const rawWindDirId = currentSlot.wd ? getBMKGWindDirection(currentSlot.wd) : '—';
+      const finalWindDir = currentSlot.wd
+        ? (isEn ? translateWindDirectionToEn(rawWindDirId) : rawWindDirId)
+        : '—';
+
+      const finalCondition = isEn
+        ? (currentSlot.weather_desc_en || translateConditionToEn(currentSlot.weather_desc || ''))
+        : (currentSlot.weather_desc || '—');
+
+      // Mirror official BMKG web: if API returns vs: null / vs_text: null, display '—' (do not invent '< 10 km')
+      const visibilityVal =
+        typeof currentSlot.vs_text === 'string' && currentSlot.vs_text.trim().length > 0
+          ? currentSlot.vs_text.trim()
+          : (typeof currentSlot.vs === 'number' && currentSlot.vs > 0
+              ? `${(currentSlot.vs / 1000).toFixed(1)} km`
+              : '—');
+
+      const lokasi = bmkgData.lokasi || {};
+      const locationParts = [lokasi.desa, lokasi.kecamatan, lokasi.kotkab].filter(Boolean);
+      const locationName = locationParts.length > 0 ? locationParts.join(', ') : 'Pondok Cina, Beji, Kota Depok';
+
+      // Real upcoming 3-hourly BMKG slots directly from the same API payload
+      const upcomingSlots = flatCuaca.slice(closestIdx + 1, closestIdx + 5).map((slot: any) => {
+        const parsed = parseBmkgLocalDatetime(slot.local_datetime || '', isEn);
+        const slotWindId = slot.wd ? getBMKGWindDirection(slot.wd) : '—';
+        return {
+          time_wib: parsed.hourWib.replace(' WIB', ''),
+          date_label: parsed.dateLabel,
+          temperature_c: slot.t,
+          humidity_percent: slot.hu,
+          precipitation_mm: typeof slot.tp === 'number' ? slot.tp : 0,
+          condition: isEn
+            ? (slot.weather_desc_en || translateConditionToEn(slot.weather_desc || ''))
+            : (slot.weather_desc || '—'),
+          wind_speed_kph: typeof slot.ws === 'number' ? slot.ws : null,
+          wind_direction: slot.wd ? (isEn ? translateWindDirectionToEn(slotWindId) : slotWindId) : '—',
+          weather_icon: slot.image || '',
+        };
+      });
+
+      return res.json({
+        source: 'BMKG',
+        adm4: lokasi.adm4 || '32.76.06.1005',
+        location_name: locationName,
+        temperature_c: currentSlot.t,
+        humidity_percent: currentSlot.hu,
+        precipitation_mm: typeof currentSlot.tp === 'number' ? `${currentSlot.tp} mm` : '—',
+        condition: finalCondition,
+        wind_speed_kph: typeof currentSlot.ws === 'number' ? currentSlot.ws : null,
+        wind_direction: finalWindDir,
+        visibility_km: visibilityVal,
+        cloud_cover_percent: typeof currentSlot.tcc === 'number' ? currentSlot.tcc : null,
+        weather_icon: currentSlot.image || '',
+        valid_at: slotTime.fullLabel,
+        valid_hour_wib: slotTime.hourWib,
+        analysis_date: currentSlot.analysis_date || null,
+        last_updated: fetchedAtWib,
+        forecast_slots: upcomingSlots,
+      });
     } catch (err) {
       console.warn(`[API] BMKG fetch failed for URL: ${url}`, err);
     }
   }
 
-  // Fallback to Open-Meteo if BMKG is entirely unreachable
-  if (!isFromBMKG) {
-    try {
-      console.log('[API] BMKG APIs failed, falling back to Open-Meteo for Kukusan region.');
-      const weatherRes = await fetch('https://api.open-meteo.com/v1/forecast?latitude=-6.4025&longitude=106.7942&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility&wind_speed_unit=kmh&timezone=Asia/Jakarta');
-      if (weatherRes.ok) {
-        const weatherData = await weatherRes.json();
-        if (weatherData && weatherData.current) {
-          temp = Math.round(weatherData.current.temperature_2m);
-          humidity = weatherData.current.relative_humidity_2m;
-          precip = `${weatherData.current.precipitation} mm`;
-          condition = getWeatherCondition(weatherData.current.weather_code);
-          
-          if (weatherData.current.wind_speed_10m !== undefined) {
-            windSpeed = Number(weatherData.current.wind_speed_10m);
-          }
-          if (weatherData.current.wind_direction_10m !== undefined) {
-            windDir = getWindDirection(weatherData.current.wind_direction_10m);
-          }
-          if (weatherData.current.visibility !== undefined) {
-            const visKm = weatherData.current.visibility / 1000;
-            visibilityVal = visKm < 10 ? `< ${Math.ceil(visKm)} km` : `${Math.round(visKm)} km`;
-          }
-          locationName = "Kukusan (Beji, Kota Depok)";
-          console.log(`[API] Open-Meteo fallback success. Temp: ${temp}°C, Humidity: ${humidity}%, Wind: ${windSpeed} km/h (${windDir}), Visibility: ${visibilityVal}`);
-        }
-      }
-    } catch (err) {
-      console.warn('[API] Open-Meteo fetch failed too, using defaults:', err);
-    }
-  }
-
-  const finalWindDir = isEn ? translateWindDirectionToEn(windDir) : windDir;
-  const finalCondition = isEn ? translateConditionToEn(condition) : condition;
-
-  // Step 2: Query Gemini with Google Search Grounding to extract active warnings and generate a customized expert summary
+  // Step 2: Honest Open-Meteo fallback ONLY when all BMKG endpoints are unreachable
   try {
-    console.log('[API] Enhancing BMKG weather with Gemini Google Search Grounding alerts.');
-    const prompt = isEn
-      ? `Search for active weather alerts (such as flood warning, heavy rain, thunderstorms) from BMKG specifically for Depok and South Jakarta today. Provide answer as JSON with field: "alerts" (array of strings, empty array if none) and "summary" (concise weather summary string in English based on real-time BMKG data: location ${locationName}, temperature ${temp}°C, humidity ${humidity}%, precipitation ${precip}, condition ${finalCondition}, wind ${windSpeed} km/h from ${finalWindDir}). Output pure JSON only without markdown code wraps.`
-      : `Cari informasi peringatan dini cuaca aktif (seperti potensi banjir, hujan lebat, angin kencang) dari BMKG khusus untuk Kota Depok dan Jakarta Selatan hari ini. Berikan jawaban dalam bentuk JSON dengan field: "alerts" (array of strings, kosongkan jika tidak ada peringatan aktif) dan "summary" (string ringkasan cuaca hari ini dalam Bahasa Indonesia berdasarkan data BMKG real-time: lokasi ${locationName}, suhu ${temp}°C, kelembaban ${humidity}%, curah hujan ${precip}, kondisi ${condition}, angin ${windSpeed} km/jam dari ${windDir}). Pastikan output hanyalah JSON murni tanpa pembungkus markdown code wraps.`;
+    console.warn('[API] BMKG endpoints unreachable, falling back to Open-Meteo.');
+    const weatherRes = await fetch(
+      'https://api.open-meteo.com/v1/forecast?latitude=-6.3655&longitude=106.8321&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&wind_speed_unit=kmh&timezone=Asia/Jakarta'
+    );
+    if (weatherRes.ok) {
+      const weatherData = await weatherRes.json();
+      const cur = weatherData?.current;
+      if (cur && typeof cur.temperature_2m === 'number') {
+        const rawCondId = getWeatherCondition(cur.weather_code);
+        const rawWindId = typeof cur.wind_direction_10m === 'number' ? getWindDirection(cur.wind_direction_10m) : '—';
+        const visKm = typeof cur.visibility === 'number' && cur.visibility > 0
+          ? `${(cur.visibility / 1000).toFixed(1)} km`
+          : '—';
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const text = response.text.trim();
-    const cleanedJson = text.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
-    const geminiData = JSON.parse(cleanedJson);
-
-    return res.json({
-      precipitation_mm: precip,
-      temperature_c: temp,
-      humidity_percent: humidity,
-      condition: finalCondition,
-      wind_speed_kph: windSpeed,
-      wind_direction: finalWindDir,
-      visibility_km: visibilityVal,
-      weather_icon: weatherIcon,
-      location_name: locationName,
-      alerts: geminiData.alerts || [],
-      last_updated: lastUpdated,
-      summary: geminiData.summary || (isEn
-        ? `Current weather in ${locationName} is ${finalCondition} with temperature ${temp}°C, humidity ${humidity}%, and wind at ${windSpeed} km/h from ${finalWindDir}. No severe flood warnings currently active.`
-        : `Kondisi cuaca saat ini di ${locationName} terpantau ${condition} dengan suhu udara ${temp}°C, kelembapan ${humidity}%, angin berhembus ${windSpeed} km/jam dari ${windDir}. Tidak ada peringatan dini bencana banjir aktif.`)
-    });
-  } catch (error: any) {
-    console.log('[INFO] live-weather Gemini enhancement fallback.');
-    return res.json({
-      precipitation_mm: precip,
-      temperature_c: temp,
-      humidity_percent: humidity,
-      condition: finalCondition,
-      wind_speed_kph: windSpeed,
-      wind_direction: finalWindDir,
-      visibility_km: visibilityVal,
-      weather_icon: weatherIcon,
-      location_name: locationName,
-      alerts: [],
-      last_updated: lastUpdated,
-      summary: isEn
-        ? `Weather in ${locationName} is ${finalCondition} with temperature ${temp}°C, humidity ${humidity}%, and wind from ${finalWindDir}. BMKG monitoring runs in standard automated mode.`
-        : `Kondisi cuaca wilayah ${locationName} terpantau ${condition} dengan suhu udara ${temp}°C, kelembaban ${humidity}%, dan arah angin dari ${windDir}. Layanan peringatan dini BMKG dialihkan ke mode pemantauan lokal otomatis.`
-    });
+        return res.json({
+          source: 'Open-Meteo',
+          adm4: null,
+          location_name: 'Pondok Cina, Beji, Kota Depok',
+          temperature_c: Math.round(cur.temperature_2m),
+          humidity_percent: cur.relative_humidity_2m ?? null,
+          precipitation_mm: typeof cur.precipitation === 'number' ? `${cur.precipitation} mm` : '—',
+          condition: isEn ? translateConditionToEn(rawCondId) : rawCondId,
+          wind_speed_kph: typeof cur.wind_speed_10m === 'number' ? Number(cur.wind_speed_10m) : null,
+          wind_direction: rawWindId !== '—' ? (isEn ? translateWindDirectionToEn(rawWindId) : rawWindId) : '—',
+          visibility_km: visKm,
+          cloud_cover_percent: typeof cur.cloud_cover === 'number' ? cur.cloud_cover : null,
+          weather_icon: '',
+          valid_at: fetchedAtWib,
+          valid_hour_wib: fetchedAtWib,
+          analysis_date: null,
+          last_updated: fetchedAtWib,
+          forecast_slots: [],
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[API] Open-Meteo fallback failed:', err);
   }
+
+  // Never invent fake weather numbers if both upstream services fail
+  return res.status(503).json({
+    error: isEn
+      ? 'Official BMKG weather API is currently unreachable.'
+      : 'API prakiraan cuaca resmi BMKG sedang tidak dapat dijangkau.',
+  });
 });
 
 // Intelligent Water Level prognostic analyzer using gemini-3.1-pro-preview with HIGH Thinking Mode
@@ -763,41 +796,67 @@ You MUST respond strictly in the following JSON structure. Do NOT use markdown c
     const result = JSON.parse(response.text.trim());
     res.json(result);
   } catch (error: any) {
-    console.log('[INFO] predict: using local physical prognostic model.');
-    
-    const readings = req.body.readings || [];
-    const latestReading = readings[readings.length - 1];
-    const curLevel = latestReading ? latestReading.level : 35;
+    console.log('[INFO] predict: falling back to local trained LSTM model (model_lstm_banjir.h5).');
+
+    const readings = Array.isArray(req.body.readings) ? req.body.readings : [];
+    const levels = readings
+      .map((r: any) => (typeof r?.level === 'number' ? r.level : typeof r?.water_level === 'number' ? r.water_level : NaN))
+      .filter((v: number) => Number.isFinite(v));
     const reqConfig = req.body.config || {};
-    const tSiaga = reqConfig.threshold_siaga || 60;
-    const tBahaya = reqConfig.threshold_bahaya || 90;
+    const tSiaga = Number(reqConfig.threshold_siaga) || 60;
+    const tBahaya = Number(reqConfig.threshold_bahaya) || 90;
+    const refHeight = Number(reqConfig.reference_height) || 300;
 
-    let status: 'Normal' | 'Siaga' | 'Bahaya' = 'Normal';
-    if (curLevel >= tBahaya) {
-      status = 'Bahaya';
-    } else if (curLevel >= tSiaga) {
-      status = 'Siaga';
-    }
+    const lstm = runLstmForecast(levels.length > 0 ? levels : [35], {
+      thresholdSiaga: tSiaga,
+      thresholdBahaya: tBahaya,
+      maxReferenceHeight: refHeight,
+    });
 
-    // Generate realistic predictions based on current status
-    const mult = status === 'Bahaya' ? 1.08 : status === 'Siaga' ? 1.04 : 1.01;
-    const pred30m = Math.max(10, Math.round((curLevel * mult) * 10) / 10);
-    const pred1h = Math.max(10, Math.round((curLevel * Math.pow(mult, 1.5)) * 10) / 10);
-    const pred3h = Math.max(10, Math.round((curLevel * Math.pow(mult, 2)) * 10) / 10);
-    const pred6h = Math.max(10, Math.round((curLevel * Math.pow(mult, 0.5)) * 10) / 10);
+    const curLevel = lstm?.currentLevel ?? 35;
+    const pred30m = lstm?.prediction_30m ?? curLevel;
+    const pred1h = lstm?.prediction_1h ?? curLevel;
+    const pred3h = lstm?.prediction_3h ?? curLevel;
+    const pred6h = lstm?.prediction_6h ?? curLevel;
+    const status = lstm?.status ?? 'Normal';
 
     return res.json({
       prediction_30m: pred30m,
       prediction_1h: pred1h,
       prediction_3h: pred3h,
       prediction_6h: pred6h,
-      confidence_score: 88,
-      status: status,
-      reasoning: `⚡ [SISTEM ANALISIS HIDROLOGI MANDIRI - SIMBA RTU ESP32]
-Hasil analisis telemetri dihitung secara real-time melalui modul komputasi hidrologi RTU SIMBA berbasis mikrokontroler mandiri ESP32:
+      confidence_score: lstm?.confidence_1h ?? 88,
+      status,
+      lstm,
+      reasoning: `[INFERENSI LSTM TERLATIH — model_lstm_banjir.h5]
+Prediksi elevasi muka air dihitung langsung menggunakan jaringan saraf LSTM(64→32)→Dense(16→1) dengan bobot terlatih (29.857 parameter, MAE validasi 2.86 cm):
 
-Berdasarkan pembacaan aktual sensor tinggi muka air JSN-SR04T saat ini sebesar ${curLevel} cm (Ambang Batas Siaga: ${tSiaga} cm, Bahaya: ${tBahaya} cm), status aliran terpantau dalam tingkat: ${status}. Data dipadukan dengan sensor kelembapan tanah (Soil Moisture Sensor) untuk memantau saturasi tanggul sungai secara kontinu. Disarankan untuk tetap memantau telemetri real-time dan mengikuti instruksi siaga bencana dari BPBD DKI secara terpadu.`
+Tinggi air aktual: ${curLevel} cm (Siaga: ${tSiaga} cm, Bahaya: ${tBahaya} cm). Proyeksi LSTM: T+30m = ${pred30m} cm, T+1j = ${pred1h} cm, T+3j = ${pred3h} cm, T+6j = ${pred6h} cm (Proyeksi Status: ${status}).`
     });
+  }
+});
+
+// Direct trained LSTM inference endpoint (model_lstm_banjir.h5 + scaler.pkl)
+app.post('/api/lstm-predict', (req, res) => {
+  try {
+    const rawLevels = Array.isArray(req.body?.levels)
+      ? req.body.levels
+      : Array.isArray(req.body?.readings)
+        ? req.body.readings.map((r: any) => (typeof r === 'number' ? r : r?.water_level ?? r?.level))
+        : [];
+    const levels = rawLevels.filter((v: any) => typeof v === 'number' && Number.isFinite(v));
+    if (levels.length === 0) {
+      return res.status(400).json({ error: 'levels array with at least 1 numeric water level (cm) is required' });
+    }
+    const result = runLstmForecast(levels, {
+      thresholdSiaga: Number(req.body?.threshold_siaga) || currentConfig.threshold_siaga || 60,
+      thresholdBahaya: Number(req.body?.threshold_bahaya) || currentConfig.threshold_bahaya || 90,
+      maxReferenceHeight: Number(req.body?.reference_height) || currentConfig.reference_height || 300,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[LSTM API] Inference error:', err);
+    return res.status(500).json({ error: err?.message || 'LSTM inference failed' });
   }
 });
 
@@ -1319,7 +1378,7 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);

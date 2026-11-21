@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebaseConfig';
+import { playAlertPreviewChime } from '../utils/alarmAudio';
+import { runLstmForecast } from '../ml/lstmEngine';
 import { collection, query, orderBy, limit, onSnapshot, doc, getDocs, where } from 'firebase/firestore';
 import { 
   SensorReading, 
@@ -170,21 +172,37 @@ export default function SCADADashboard({
     }
   };
 
-  // Live Grounded Weather & Sound Warning systems
+  // Official BMKG Public API weather state (100% real data, zero fabricated defaults)
   const [liveWeather, setLiveWeather] = useState<{
-    precipitation_mm: string | number;
+    source: 'BMKG' | 'Open-Meteo';
+    adm4: string | null;
+    location_name: string;
     temperature_c: number;
-    humidity_percent: number;
+    humidity_percent: number | null;
+    precipitation_mm: string | number;
     condition: string;
-    alerts: string[];
+    wind_speed_kph: number | null;
+    wind_direction: string;
+    visibility_km: string;
+    cloud_cover_percent: number | null;
+    weather_icon: string;
+    valid_at: string;
+    valid_hour_wib: string;
+    analysis_date: string | null;
     last_updated: string;
-    summary: string;
-    wind_speed_kph?: number;
-    wind_direction?: string;
-    visibility_km?: string | number;
-    weather_icon?: string;
-    location_name?: string;
+    forecast_slots: Array<{
+      time_wib: string;
+      date_label: string;
+      temperature_c: number;
+      humidity_percent: number | null;
+      precipitation_mm: number;
+      condition: string;
+      wind_speed_kph: number | null;
+      wind_direction: string;
+      weather_icon: string;
+    }>;
   } | null>(null);
+  const [weatherError, setWeatherError] = useState<string | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
   const [internalSoundEnabled, setInternalSoundEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -203,7 +221,7 @@ export default function SCADADashboard({
       setInternalSoundEnabled(next);
       localStorage.setItem('scada_sound_enabled', String(next));
       if (next) {
-        playAlertSound('Siaga');
+        playAlertPreviewChime();
       }
     }
   };
@@ -280,109 +298,6 @@ export default function SCADADashboard({
     return () => clearInterval(timer);
   }, [latestReading, language]);
 
-  // Keep track of the active custom Audio object and synthesizer loops to prevent overlap
-  const activeAudioRef = React.useRef<HTMLAudioElement | null>(null);
-  const synthIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
-
-  const stopCurrentAudio = () => {
-    if (synthIntervalRef.current) {
-      clearInterval(synthIntervalRef.current);
-      synthIntervalRef.current = null;
-    }
-    if (activeAudioRef.current) {
-      try {
-        if ((activeAudioRef.current as any)._loopInterval) {
-          clearInterval((activeAudioRef.current as any)._loopInterval);
-          (activeAudioRef.current as any)._loopInterval = null;
-        }
-        activeAudioRef.current.pause();
-        activeAudioRef.current.currentTime = 0;
-      } catch (err) {
-        console.warn('Failed to stop current audio:', err);
-      }
-      activeAudioRef.current = null;
-    }
-  };
-
-  const setupAudioAnalyser = (audio: HTMLAudioElement) => {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) return;
-
-      if (!(window as any).__visualizerContext) {
-        (window as any).__visualizerContext = new AudioContextClass();
-      }
-      const ctx = (window as any).__visualizerContext;
-      
-      if (ctx.state === 'suspended') {
-        ctx.resume();
-      }
-
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 32;
-      const bufferLength = analyser.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
-
-      audio.crossOrigin = "anonymous";
-      const source = ctx.createMediaElementSource(audio);
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
-
-      let animId: number;
-      const readData = () => {
-        if (!activeAudioRef.current || activeAudioRef.current !== audio) {
-          cancelAnimationFrame(animId);
-          return;
-        }
-
-        analyser.getByteFrequencyData(dataArray);
-        
-        let sum = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          sum += dataArray[i];
-        }
-        const avg = sum / bufferLength;
-        const norm = Math.min(avg / 130, 1.0); 
-        
-        (window as any).__audioAmplitude = norm;
-
-        animId = requestAnimationFrame(readData);
-      };
-
-      animId = requestAnimationFrame(readData);
-
-      audio.addEventListener('pause', () => {
-        cancelAnimationFrame(animId);
-        (window as any).__audioAmplitude = 0;
-      });
-      audio.addEventListener('ended', () => {
-        cancelAnimationFrame(animId);
-        (window as any).__audioAmplitude = 0;
-      });
-    } catch (err) {
-      console.warn('[Audio Analyser] Fallback active:', err);
-      
-      let start = Date.now();
-      let animIdFallback: number;
-      const runFallback = () => {
-        if (!activeAudioRef.current || activeAudioRef.current !== audio) {
-          cancelAnimationFrame(animIdFallback);
-          return;
-        }
-        
-        const t = (Date.now() - start) / 1000;
-        const isBahaya = (audio as any)._alertType === 'Bahaya';
-        const speed = isBahaya ? 6 : 2;
-        const norm = 0.5 + 0.5 * Math.sin(t * speed);
-        
-        (window as any).__audioAmplitude = norm;
-        animIdFallback = requestAnimationFrame(runFallback);
-      };
-      
-      animIdFallback = requestAnimationFrame(runFallback);
-    }
-  };
-
   const isDark = theme === 'dark';
   const themeCard = isDark ? 'bg-[#0D0D0F] border-white/5 shadow-xl text-slate-300' : 'bg-white border-slate-200 shadow-md text-slate-700';
   const themeTextHeader = isDark ? 'text-white' : 'text-slate-800';
@@ -435,7 +350,7 @@ export default function SCADADashboard({
     let unsubscribeReadings: (() => void) | null = null;
     if (sharedReadings === undefined) {
       unsubscribeReadings = onSnapshot(
-        getFirestoreQuery('sensor_readings', 20),
+        getFirestoreQuery('sensor_readings', 48),
         (snapshot) => {
           setHasReceivedReadingsSnapshot(true);
           const data: SensorReading[] = [];
@@ -587,258 +502,35 @@ export default function SCADADashboard({
     }
   };
 
-  // Fetch live weather data with Google Search Grounding and language support
+  // Fetch genuine live weather directly from official BMKG public API via backend proxy
   const fetchLiveWeather = async (targetLang: string = language) => {
     setLoadingWeather(true);
+    setWeatherError(null);
     try {
       const res = await fetch(`/api/live-weather?lang=${targetLang}`);
-      if (!res.ok) throw new Error('Live weather fetch failed');
       const data = await res.json();
-      setLiveWeather(data);
-    } catch (err) {
-      console.error(err);
-      if (targetLang === 'en') {
-        setLiveWeather({
-          precipitation_mm: "12.5 mm",
-          temperature_c: 26,
-          humidity_percent: 88,
-          condition: "Moderate Rain / Overcast",
-          wind_speed_kph: 6.7,
-          wind_direction: "South ↑",
-          visibility_km: "< 9 km",
-          alerts: [
-            "BMKG Early Warning: Be aware of potential moderate to heavy rain accompanied by lightning and gusty winds in South Jakarta and Depok.",
-            "Alert for rising water elevation (TMA) of upstream Ciliwung River due to heavy rainfall."
-          ],
-          last_updated: "July 8, 2026, 06:00 WIB",
-          summary: "Upstream weather across Depok-Bogor is wet with accumulated moderate rainfall reaching 12.5 mm. High humidity induces convective cloud formation along the river basin."
-        });
-      } else {
-        setLiveWeather({
-          precipitation_mm: "12.5 mm",
-          temperature_c: 26,
-          humidity_percent: 88,
-          condition: "Hujan Sedang / Berawan Tebal",
-          wind_speed_kph: 6.7,
-          wind_direction: "Selatan ↑",
-          visibility_km: "< 9 km",
-          alerts: [
-            "Peringatan Dini BMKG: Waspada potensi hujan sedang hingga lebat disertai kilat/petir dan angin kencang di wilayah Jakarta Selatan dan Depok pada sore hingga malam hari.",
-            "Waspada kenaikan Tinggi Muka Air (TMA) Sungai Ciliwung hulu Bogor-Depok akibat curah hujan tinggi."
-          ],
-          last_updated: "8 Juli 2026, 06:00 WIB",
-          summary: "Kondisi cuaca hulu Depok-Bogor dilaporkan basah dengan curah hujan sedang akumulatif mencapai 12.5 mm dalam 1 jam terakhir. Kelembaban udara tinggi memicu potensi pembentukan awan konvektif tebal sepanjang aliran sungai Ciliwung."
-        });
+      if (!res.ok) {
+        throw new Error(data?.error || (targetLang === 'en'
+          ? 'Official BMKG weather API is currently unreachable.'
+          : 'API prakiraan cuaca resmi BMKG sedang tidak dapat dijangkau.'));
       }
+      setLiveWeather(data);
+    } catch (err: any) {
+      console.error('[BMKG] Live weather fetch failed:', err);
+      setLiveWeather(null);
+      setWeatherError(
+        err?.message || (targetLang === 'en'
+          ? 'Failed to fetch official BMKG weather data.'
+          : 'Gagal mengambil data cuaca resmi BMKG.')
+      );
     } finally {
       setLoadingWeather(false);
-    }
-  };
-
-  // Simulate synthesized audio amplitude
-  const simulateSynthPulse = (durationMs: number, maxAmp: number) => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - start;
-      if (elapsed >= durationMs) {
-        clearInterval(interval);
-        (window as any).__audioAmplitude = 0;
-      } else {
-        const progress = elapsed / durationMs;
-        const amp = Math.sin(progress * Math.PI) * maxAmp;
-        (window as any).__audioAmplitude = Math.max((window as any).__audioAmplitude || 0, amp);
-      }
-    }, 16);
-  };
-
-  // Synthesize warning tones using Web Audio API as fallback
-  const playSynthesizedSound = (type: 'Siaga' | 'Bahaya') => {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) return;
-      const ctx = new AudioContextClass();
-      
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      
-      if (type === 'Bahaya') {
-        // Waspada/Bahaya -> Urgent dual-tone siren
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(950, ctx.currentTime);
-        
-        gain.gain.setValueAtTime(0.12, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
-        
-        osc.start();
-        osc.stop(ctx.currentTime + 0.2);
-
-        simulateSynthPulse(200, 0.95);
-
-        // Play second tone shortly after
-        setTimeout(() => {
-          simulateSynthPulse(200, 1.0);
-          try {
-            const ctx2 = new AudioContextClass();
-            const osc2 = ctx2.createOscillator();
-            const gain2 = ctx2.createGain();
-            osc2.connect(gain2);
-            gain2.connect(ctx2.destination);
-            osc2.type = 'triangle';
-            osc2.frequency.setValueAtTime(1050, ctx2.currentTime);
-            gain2.gain.setValueAtTime(0.12, ctx2.currentTime);
-            gain2.gain.exponentialRampToValueAtTime(0.001, ctx2.currentTime + 0.18);
-            osc2.start();
-            osc2.stop(ctx2.currentTime + 0.2);
-          } catch (e) {}
-        }, 180);
-      } else {
-        // Siaga -> Elegant distinct dual-tone chime (High to Low)
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(620, ctx.currentTime);
-        
-        gain.gain.setValueAtTime(0.08, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
-        
-        osc.start();
-        osc.stop(ctx.currentTime + 0.25);
-
-        simulateSynthPulse(250, 0.7);
-
-        // Play second chime note shortly after
-        setTimeout(() => {
-          simulateSynthPulse(250, 0.75);
-          try {
-            const ctx2 = new AudioContextClass();
-            const osc2 = ctx2.createOscillator();
-            const gain2 = ctx2.createGain();
-            osc2.connect(gain2);
-            gain2.connect(ctx2.destination);
-            osc2.type = 'sine';
-            osc2.frequency.setValueAtTime(490, ctx2.currentTime);
-            gain2.gain.setValueAtTime(0.08, ctx2.currentTime);
-            gain2.gain.exponentialRampToValueAtTime(0.001, ctx2.currentTime + 0.22);
-            osc2.start();
-            osc2.stop(ctx2.currentTime + 0.25);
-          } catch (e) {}
-        }, 160);
-      }
-    } catch (e) {
-      console.warn('Synthesized audio failed:', e);
-    }
-  };
-
-  const triggerSynthesizedLoop = (type: 'Siaga' | 'Bahaya') => {
-    if (synthIntervalRef.current) {
-      clearInterval(synthIntervalRef.current);
-    }
-    const intervalTime = type === 'Bahaya' ? 1500 : 4500;
-    synthIntervalRef.current = setInterval(() => {
-      playSynthesizedSound(type);
-    }, intervalTime);
-  };
-
-  // Play warning tones or custom mp3 cleanly (no overlapping, seamless native looping)
-  const playAlertSound = (type: 'Siaga' | 'Bahaya') => {
-    // If already playing custom audio for this alert type, do not interrupt it (keeps loop perfectly smooth)
-    if (activeAudioRef.current && (activeAudioRef.current as any)._alertType === type) {
-      console.log(`[Audio] Already looping custom alarm for: ${type}`);
-      return;
-    }
-
-    // Always stop any playing audio first to prevent overlap (ketiban)
-    stopCurrentAudio();
-
-    try {
-      const audioPaths = type === 'Siaga' 
-        ? [
-            '/alarm_siaga.mp3',
-            '/alarm_siaga.wav',
-            '/siaga.mp3',
-            '/siaga.wav',
-            '/assets/alarm_siaga.mp3',
-            '/assets/siaga.mp3'
-          ]
-        : [
-            '/alarm_bahaya.mp3',
-            '/alarm_bahaya.wav',
-            '/bahaya.mp3',
-            '/bahaya.wav',
-            '/assets/alarm_bahaya.mp3',
-            '/assets/bahaya.mp3'
-          ];
-        
-      const tryPlayAudio = (index: number) => {
-        if (index >= audioPaths.length) {
-          // All MP3 files failed, fall back to synthesized sound
-          playSynthesizedSound(type);
-          triggerSynthesizedLoop(type);
-          return;
-        }
-        
-        const audio = new Audio(audioPaths[index]);
-        audio.volume = type === 'Siaga' ? 0.45 : 0.55;
-        audio.loop = true; // Keep native loop as secondary fallback
-        (audio as any)._alertType = type;
-        
-        // High-precision pre-emptive gapless loop to eliminate the trailing decoder/padding silence gap in MP3/WAV files.
-        const gaplessTimer = setInterval(() => {
-          if (audio.paused || audio.ended || activeAudioRef.current !== audio) {
-            clearInterval(gaplessTimer);
-            return;
-          }
-          // If we reach 120ms before the absolute duration, trigger seamless restart
-          if (audio.duration && audio.currentTime >= audio.duration - 0.12) {
-            audio.currentTime = 0.01; // Jump past any starting silence frame
-          }
-        }, 20);
-        (audio as any)._loopInterval = gaplessTimer;
-
-        // Save reference so we can stop it later
-        activeAudioRef.current = audio;
-
-        audio.play()
-          .then(() => {
-            console.log(`[Audio] Played custom alarm audio with gapless loop: ${audioPaths[index]}`);
-            
-            // Wire up real-time audio-reactivity!
-            setupAudioAnalyser(audio);
-
-            // Cancel any fallback synthesized interval since custom audio is looping flawlessly
-            if (synthIntervalRef.current) {
-              clearInterval(synthIntervalRef.current);
-              synthIntervalRef.current = null;
-            }
-          })
-          .catch((err) => {
-            console.warn(`[Audio] Failed to play: ${audioPaths[index]}`, err);
-            if ((audio as any)._loopInterval) {
-              clearInterval((audio as any)._loopInterval);
-            }
-            if (activeAudioRef.current === audio) {
-              activeAudioRef.current = null;
-              tryPlayAudio(index + 1);
-            }
-          });
-      };
-      
-      tryPlayAudio(0);
-    } catch (e) {
-      console.warn('Audio play block failed, falling back:', e);
-      playSynthesizedSound(type);
-      triggerSynthesizedLoop(type);
     }
   };
 
   // Run initial weather fetch on dashboard open and refetch when language changes
   useEffect(() => {
     fetchLiveWeather(language);
-    (window as any).__playAlertSound = playAlertSound;
-    return () => {
-      delete (window as any).__playAlertSound;
-    };
   }, [language]);
 
   // Determine alert status design tokens
@@ -871,28 +563,7 @@ export default function SCADADashboard({
     alertLabel = language === 'en' ? 'WARNING / ALERT' : 'SIAGA / WASPADA';
   }
 
-  // Audio Warning Loop Effect (respects soundEnabled and operator preferences)
-  useEffect(() => {
-    if (!soundEnabled || alertStatus === 'Normal' || alertStatus === 'Offline') {
-      stopCurrentAudio();
-      return;
-    }
-    if (alertStatus === 'Siaga' && !prefSoundSiaga) {
-      stopCurrentAudio();
-      return;
-    }
-    if (alertStatus === 'Bahaya' && !prefSoundBahaya) {
-      stopCurrentAudio();
-      return;
-    }
-
-    // Play once immediately (loops natively if custom file works, or triggers synth interval if fallback is active)
-    playAlertSound(alertStatus);
-
-    return () => {
-      stopCurrentAudio();
-    };
-  }, [soundEnabled, alertStatus, prefSoundSiaga, prefSoundBahaya]);
+  // Audio warning playback is managed globally by App.tsx across Dashboard, Simulasi 3D, and Kontrol PLC.
 
   // Request Browser Notification Permission on mount
   useEffect(() => {
@@ -1104,13 +775,75 @@ export default function SCADADashboard({
       })
     : cleanReadings;
 
-  // Future Prediction Points
-  const predictionCurves = latestPrediction ? [
-    { name: 'T+30m', prediksi: latestPrediction.prediction_30m },
-    { name: 'T+1h', prediksi: latestPrediction.prediction_1h },
-    { name: 'T+3h', prediksi: latestPrediction.prediction_3h },
-    { name: 'T+6h', prediksi: latestPrediction.prediction_6h }
-  ] : [];
+  // Live 6-hour autoregressive LSTM inference using trained weights from model_lstm_banjir.h5
+  const lstmForecast = useMemo(() => {
+    const sourceFiltered = !config?.auto_simulation
+      ? readingsList.filter(
+          (r) =>
+            r.source?.includes('Hardware') ||
+            r.source?.includes('ESP') ||
+            !r.source?.toLowerCase().includes('simulat')
+        )
+      : readingsList;
+
+    const baseList = sourceFiltered.length > 0 ? sourceFiltered : readingsList;
+    let series: number[] = baseList
+      .map((r) => r.water_level)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+
+    // If fewer than 24 Firestore records exist but ESP32 sent a 360-sample batch, downsample evenly to 24 steps
+    if (series.length < 24 && hasBatchData) {
+      const batchLevels: number[] = rawBatch
+        .map((item: any) => {
+          if (Array.isArray(item)) return Number(item[1]);
+          if (item && typeof item === 'object') {
+            if (typeof item.distance === 'number') return Math.max(0, refHeight - item.distance);
+            if (typeof item.water_level === 'number') return item.water_level;
+          }
+          return NaN;
+        })
+        .filter((v: number) => Number.isFinite(v));
+
+      if (batchLevels.length >= 2) {
+        const targetCount = Math.min(24, batchLevels.length);
+        const sampled: number[] = [];
+        for (let i = 0; i < targetCount; i++) {
+          const idx = Math.round((i * (batchLevels.length - 1)) / Math.max(1, targetCount - 1));
+          sampled.push(batchLevels[idx]);
+        }
+        series = sampled;
+      }
+    }
+
+    if (series.length === 0 && latestReading && typeof latestReading.water_level === 'number') {
+      series = [latestReading.water_level];
+    }
+
+    if (series.length === 0) return null;
+
+    return runLstmForecast(series, {
+      thresholdSiaga,
+      thresholdBahaya,
+      maxReferenceHeight: refHeight,
+    });
+  }, [readingsList, rawBatch, hasBatchData, latestReading, config?.auto_simulation, thresholdSiaga, thresholdBahaya, refHeight]);
+
+  // Future Prediction Points (prefer live trained LSTM output over static Firestore document)
+  const predictionCurves = lstmForecast
+    ? [
+        { name: 'T+30m', prediksi: lstmForecast.prediction_30m },
+        { name: 'T+1h', prediksi: lstmForecast.prediction_1h },
+        { name: 'T+3h', prediksi: lstmForecast.prediction_3h },
+        { name: 'T+6h', prediksi: lstmForecast.prediction_6h },
+      ]
+    : latestPrediction
+      ? [
+          { name: 'T+30m', prediksi: latestPrediction.prediction_30m },
+          { name: 'T+1h', prediksi: latestPrediction.prediction_1h },
+          { name: 'T+3h', prediksi: latestPrediction.prediction_3h },
+          { name: 'T+6h', prediksi: latestPrediction.prediction_6h },
+        ]
+      : [];
 
   return (
     <div id="scada-dashboard-root" className="grid grid-cols-1 lg:grid-cols-12 gap-6 pb-12">
@@ -1611,103 +1344,156 @@ export default function SCADADashboard({
 
       </div>
 
-      {/* ROW 3: SYMMETRICAL 4-COLUMN LSTM PROGNOSTIC FORECAST HORIZONS */}
-      <div id="processed-forecast-panel" className="col-span-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        
-        <div className={`${themeCard} rounded-2xl p-5 flex flex-col justify-between`}>
-          <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9px] uppercase tracking-widest`}>
-            <span>Horizon T+30m</span>
-            <Clock className={`w-3.5 h-3.5 ${themeTextMuted}`} />
-          </div>
-          <div className="my-3">
-            <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {latestPrediction ? `${latestPrediction.prediction_30m}` : '--'} <span className="text-xs font-normal text-slate-400">cm</span>
+      {/* ROW 3: SYMMETRICAL 4-COLUMN TRAINED LSTM PROGNOSTIC FORECAST HORIZONS */}
+      <div id="processed-forecast-panel" className="col-span-12 flex flex-col gap-3">
+        <div className={`flex flex-wrap items-center justify-between gap-2 px-1`}>
+          <div className="flex flex-col">
+            <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
+              {language === 'en' ? 'LSTM Elevation Forecast (Trained Neural Network)' : 'Prediksi Elevasi LSTM (Model Terlatih)'}
+            </span>
+            <span className="font-mono text-[9px] text-[#3B82F6] tracking-wider mt-0.5">
+              {lstmForecast
+                ? `${lstmForecast.modelMeta.sourceFile} // ${lstmForecast.modelMeta.architecture} • ${lstmForecast.modelMeta.totalParams.toLocaleString('id-ID')} params • MAE ${lstmForecast.modelMeta.maeCm} cm`
+                : 'model_lstm_banjir.h5 // Menunggu data telemetri sensor...'}
             </span>
           </div>
-          <div className="text-[10px] font-mono text-[#3B82F6] bg-[#3B82F6]/5 border border-[#3B82F6]/15 rounded py-1 text-center tabular-nums">
-            CONF: {latestPrediction ? `${latestPrediction.confidence_score}%` : '--%'}
-          </div>
+          {lstmForecast && (
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
+              <span className={`px-2 py-0.5 rounded-md border ${isDark ? 'bg-white/[0.03] border-white/10 text-zinc-400' : 'bg-slate-50 border-slate-200 text-slate-600'} tabular-nums`}>
+                WINDOW: {lstmForecast.inputCount}/24
+              </span>
+              <span className={`px-2 py-0.5 rounded-md border ${isDark ? 'bg-white/[0.03] border-white/10 text-zinc-400' : 'bg-slate-50 border-slate-200 text-slate-600'} tabular-nums`}>
+                {lstmForecast.inferenceMs.toFixed(1)} ms
+              </span>
+              <span className={`px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${
+                lstmForecast.status === 'Bahaya'
+                  ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
+                  : lstmForecast.status === 'Siaga'
+                    ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                    : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+              }`}>
+                {language === 'en' ? `6H OUTLOOK: ${lstmForecast.status}` : `PROYEKSI 6J: ${lstmForecast.status === 'Normal' ? 'AMAN' : lstmForecast.status.toUpperCase()}`}
+              </span>
+            </div>
+          )}
         </div>
 
-        <div className={`${themeCard} rounded-2xl p-5 flex flex-col justify-between`}>
-          <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9px] uppercase tracking-widest`}>
-            <span>{language === 'en' ? 'Horizon T+1 Hour' : 'Horizon T+1 Jam'}</span>
-            <Clock className="w-3.5 h-3.5 text-[#3B82F6]" />
-          </div>
-          <div className="my-3">
-            <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {latestPrediction ? `${latestPrediction.prediction_1h}` : '--'} <span className="text-xs font-normal text-slate-400">cm</span>
-            </span>
-          </div>
-          <div className="text-[10px] font-mono text-[#3B82F6] bg-[#3B82F6]/5 border border-[#3B82F6]/15 rounded py-1 text-center tabular-nums">
-            CONF: {latestPrediction ? `${Math.round(latestPrediction.confidence_score * 0.95)}%` : '--%'}
-          </div>
-        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[
+            {
+              label: 'Horizon T+30m',
+              value: lstmForecast ? lstmForecast.prediction_30m : latestPrediction?.prediction_30m,
+              conf: lstmForecast ? lstmForecast.confidence_30m : latestPrediction?.confidence_score,
+              iconClass: themeTextMuted,
+              badgeClass: 'text-[#3B82F6] bg-[#3B82F6]/5 border-[#3B82F6]/15',
+            },
+            {
+              label: language === 'en' ? 'Horizon T+1 Hour' : 'Horizon T+1 Jam',
+              value: lstmForecast ? lstmForecast.prediction_1h : latestPrediction?.prediction_1h,
+              conf: lstmForecast ? lstmForecast.confidence_1h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.95) : undefined),
+              iconClass: 'text-[#3B82F6]',
+              badgeClass: 'text-[#3B82F6] bg-[#3B82F6]/5 border-[#3B82F6]/15',
+            },
+            {
+              label: language === 'en' ? 'Horizon T+3 Hours' : 'Horizon T+3 Jam',
+              value: lstmForecast ? lstmForecast.prediction_3h : latestPrediction?.prediction_3h,
+              conf: lstmForecast ? lstmForecast.confidence_3h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.88) : undefined),
+              iconClass: 'text-purple-400',
+              badgeClass: 'text-purple-400 bg-purple-950/15 border-purple-800/20',
+            },
+            {
+              label: language === 'en' ? 'Horizon T+6 Hours' : 'Horizon T+6 Jam',
+              value: lstmForecast ? lstmForecast.prediction_6h : latestPrediction?.prediction_6h,
+              conf: lstmForecast ? lstmForecast.confidence_6h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.78) : undefined),
+              iconClass: 'text-amber-400',
+              badgeClass: 'text-amber-400 bg-amber-950/15 border-amber-800/20',
+            },
+          ].map((card) => {
+            const delta =
+              lstmForecast && typeof card.value === 'number'
+                ? Math.round((card.value - lstmForecast.currentLevel) * 10) / 10
+                : null;
+            const deltaColor =
+              delta === null
+                ? themeTextMuted
+                : delta > 0.5
+                  ? 'text-amber-400'
+                  : delta < -0.5
+                    ? 'text-emerald-400'
+                    : themeTextMuted;
 
-        <div className={`${themeCard} rounded-2xl p-5 flex flex-col justify-between`}>
-          <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9px] uppercase tracking-widest`}>
-            <span>{language === 'en' ? 'Horizon T+3 Hours' : 'Horizon T+3 Jam'}</span>
-            <Clock className="w-3.5 h-3.5 text-purple-400" />
-          </div>
-          <div className="my-3">
-            <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {latestPrediction ? `${latestPrediction.prediction_3h}` : '--'} <span className="text-xs font-normal text-slate-400">cm</span>
-            </span>
-          </div>
-          <div className="text-[10px] font-mono text-purple-400 bg-purple-950/15 border border-purple-800/20 rounded py-1 text-center tabular-nums">
-            CONF: {latestPrediction ? `${Math.round(latestPrediction.confidence_score * 0.88)}%` : '--%'}
-          </div>
+            return (
+              <div key={card.label} className={`${themeCard} rounded-2xl p-5 flex flex-col justify-between`}>
+                <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9px] uppercase tracking-widest`}>
+                  <span>{card.label}</span>
+                  <Clock className={`w-3.5 h-3.5 ${card.iconClass}`} />
+                </div>
+                <div className="my-3 flex items-baseline justify-between gap-2">
+                  <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                    {typeof card.value === 'number' ? card.value.toFixed(1) : '--'}{' '}
+                    <span className="text-xs font-normal text-slate-400">cm</span>
+                  </span>
+                  {delta !== null && (
+                    <span className={`font-mono text-[10px] tabular-nums ${deltaColor}`}>
+                      {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} cm
+                    </span>
+                  )}
+                </div>
+                <div className={`text-[10px] font-mono border rounded py-1 text-center tabular-nums ${card.badgeClass}`}>
+                  CONF: {typeof card.conf === 'number' ? `${card.conf}%` : '--%'}
+                </div>
+              </div>
+            );
+          })}
         </div>
-
-        <div className={`${themeCard} rounded-2xl p-5 flex flex-col justify-between`}>
-          <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9px] uppercase tracking-widest`}>
-            <span>{language === 'en' ? 'Horizon T+6 Hours' : 'Horizon T+6 Jam'}</span>
-            <Clock className="w-3.5 h-3.5 text-amber-400" />
-          </div>
-          <div className="my-3">
-            <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {latestPrediction ? `${latestPrediction.prediction_6h}` : '--'} <span className="text-xs font-normal text-slate-400">cm</span>
-            </span>
-          </div>
-          <div className="text-[10px] font-mono text-amber-400 bg-amber-950/15 border border-amber-800/20 rounded py-1 text-center tabular-nums">
-            CONF: {latestPrediction ? `${Math.round(latestPrediction.confidence_score * 0.78)}%` : '--%'}
-          </div>
-        </div>
-
       </div>
 
-      {/* ROW 4: BALANCED HORIZONTAL BMKG WEATHER FORECAST & GROUNDING */}
+      {/* ROW 4: OFFICIAL BMKG PUBLIC API WEATHER FORECAST */}
       <div id="bmkg-gauge" className={`col-span-12 ${themeCard} rounded-2xl p-6 relative overflow-hidden`}>
         <div className={`flex flex-wrap justify-between items-center gap-3 pb-4 mb-5 border-b ${themeBorder}`}>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex flex-col">
               <span className={`text-[10px] font-bold uppercase tracking-[0.25em] ${themeTextMuted} font-mono`}>
-                {language === 'en' ? 'Official BMKG Forecast & Grounding' : 'Prakiraan BMKG & Grounding Cuaca'}
+                {language === 'en' ? 'Official BMKG Weather Forecast' : 'Prakiraan Cuaca Resmi BMKG'}
               </span>
               <span className="font-mono text-[8px] text-[#3B82F6] uppercase tracking-wider mt-0.5">
-                gemini-3.5-flash // Search Grounded
+                {liveWeather?.source === 'Open-Meteo'
+                  ? (language === 'en' ? 'Open-Meteo Fallback // BMKG Unreachable' : 'Fallback Open-Meteo // API BMKG Tidak Terjangkau')
+                  : `API PUBLIK BMKG // ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
               </span>
             </div>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/20 text-[9px] font-bold uppercase tracking-wider text-sky-500 font-sans">
-              <span>{language === 'en' ? 'CURRENT OBSERVATION' : 'SAAT INI'}</span>
-              <span title={language === 'en' ? 'Integrated upstream river basin weather' : 'Informasi cuaca terpadu hulu aliran sungai Depok'}>
-                <Info className="w-3 h-3 text-sky-400 cursor-help" />
+            {liveWeather?.valid_hour_wib && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/20 text-[9px] font-bold uppercase tracking-wider text-sky-500 font-mono">
+                <span>
+                  {language === 'en'
+                    ? `SLOT ${liveWeather.valid_hour_wib}`
+                    : `PRAKIRAAN ${liveWeather.valid_hour_wib}`}
+                </span>
+                <span
+                  title={
+                    language === 'en'
+                      ? `Official BMKG 3-hourly forecast slot (${liveWeather.valid_at})`
+                      : `Slot prakiraan 3-jaman resmi BMKG (${liveWeather.valid_at})`
+                  }
+                >
+                  <Info className="w-3 h-3 text-sky-400 cursor-help" />
+                </span>
               </span>
-            </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
             {liveWeather?.last_updated && (
               <span className={`text-[9px] font-mono ${themeTextMuted}`}>
-                {language === 'en' ? 'Updated: ' : 'Diperbarui: '}{liveWeather.last_updated}
+                {language === 'en' ? 'Synced: ' : 'Disinkronkan: '}{liveWeather.last_updated}
               </span>
             )}
-            <button 
+            <button
               id="btn-sync-weather"
-              onClick={fetchLiveWeather}
+              onClick={() => fetchLiveWeather(language)}
               disabled={loadingWeather}
               className={`p-2 rounded-lg border transition-all cursor-pointer ${isDark ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'}`}
-              title={language === 'en' ? 'Synchronize Live Weather Data' : 'Sinkronisasi Data Cuaca Terkini'}
+              title={language === 'en' ? 'Refresh Official BMKG Data' : 'Muat Ulang Data Resmi BMKG'}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loadingWeather ? 'animate-spin' : ''}`} />
             </button>
@@ -1719,26 +1505,25 @@ export default function SCADADashboard({
             <RefreshCw className="w-5 h-5 animate-spin text-[#3B82F6] mb-2" />
             <span className={`text-[9px] font-mono uppercase tracking-wider ${themeTextMuted} text-center px-4`}>
               {language === 'en'
-                ? 'Connecting to Google Search to retrieve live upstream Bogor-Depok weather...'
-                : 'Menghubungkan ke Google Search untuk mencari cuaca terkini hulu Bogor-Depok...'}
+                ? 'Fetching official weather forecast from BMKG public API...'
+                : 'Mengambil data prakiraan cuaca resmi dari API publik BMKG...'}
             </span>
           </div>
         ) : liveWeather ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            {/* Left Zone: Primary Temperature & Location */}
+            {/* Left Zone: Verbatim BMKG Temperature, Condition & Location */}
             <div className="lg:col-span-4 flex items-center gap-4">
               <div className="relative flex-shrink-0">
                 {liveWeather.weather_icon ? (
-                  <img 
-                    src={liveWeather.weather_icon} 
-                    alt={liveWeather.condition} 
-                    className="w-16 h-16 object-contain filter drop-shadow" 
+                  <img
+                    src={liveWeather.weather_icon}
+                    alt={liveWeather.condition}
+                    className="w-16 h-16 object-contain filter drop-shadow"
                     referrerPolicy="no-referrer"
                   />
                 ) : (
-                  <CloudRain className="w-16 h-16 text-[#3B82F6] filter drop-shadow animate-pulse" />
+                  <CloudRain className="w-16 h-16 text-[#3B82F6] filter drop-shadow" />
                 )}
-                <div className="absolute -top-1 -right-1 w-5 h-5 bg-amber-400/10 rounded-full blur-sm" />
               </div>
 
               <div className="min-w-0">
@@ -1747,19 +1532,26 @@ export default function SCADADashboard({
                     {liveWeather.temperature_c}°C
                   </span>
                   <span className={`text-sm font-semibold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                    {language === 'en' ? translateConditionToEn(liveWeather.condition) : liveWeather.condition}
+                    {liveWeather.condition}
                   </span>
                 </div>
                 <span className={`text-[11px] ${themeTextSub} block mt-1 truncate`}>
-                  {language === 'en' ? 'in ' : 'di '}{liveWeather.location_name || (language === 'en' ? 'Depok & upstream Ciliwung' : 'Depok & wilayah hulu Ciliwung')}
+                  {language === 'en' ? 'in ' : 'di '}{liveWeather.location_name}
                 </span>
-                <span className={`text-[10px] ${themeTextMuted} font-mono block mt-1`}>
-                  {language === 'en' ? 'Precipitation: ' : 'Curah hujan: '}{liveWeather.precipitation_mm}
-                </span>
+                <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] ${themeTextMuted} font-mono mt-1`}>
+                  <span>
+                    {language === 'en' ? 'Precip: ' : 'Curah hujan: '}{liveWeather.precipitation_mm ?? '—'}
+                  </span>
+                  {typeof liveWeather.cloud_cover_percent === 'number' && (
+                    <span>
+                      {language === 'en' ? 'Cloud: ' : 'Tutupan awan: '}{liveWeather.cloud_cover_percent}%
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Middle Zone: 2x2 Atmospheric Telemetry Grid */}
+            {/* Middle Zone: 2x2 Verbatim Atmospheric Telemetry Grid */}
             <div className="lg:col-span-4 grid grid-cols-2 gap-2.5">
               <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
                 <div className="text-sky-500 p-1.5 bg-sky-500/10 rounded-lg shrink-0">
@@ -1768,7 +1560,7 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Humidity' : 'Kelembapan'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {liveWeather.humidity_percent}%
+                    {typeof liveWeather.humidity_percent === 'number' ? `${liveWeather.humidity_percent}%` : '—'}
                   </span>
                 </div>
               </div>
@@ -1780,7 +1572,9 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Wind Speed' : 'Kecepatan Angin'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {liveWeather.wind_speed_kph !== undefined ? liveWeather.wind_speed_kph.toLocaleString(language === 'en' ? 'en-US' : 'id-ID') : '6.7'} km/h
+                    {typeof liveWeather.wind_speed_kph === 'number'
+                      ? `${liveWeather.wind_speed_kph.toLocaleString(language === 'en' ? 'en-US' : 'id-ID')} ${language === 'en' ? 'km/h' : 'km/j'}`
+                      : '—'}
                   </span>
                 </div>
               </div>
@@ -1792,9 +1586,7 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Wind Direction' : 'Arah Angin'}</span>
                   <span className={`font-bold mt-0.5 truncate ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {liveWeather.wind_direction 
-                      ? (language === 'en' ? translateWindDirectionToEn(liveWeather.wind_direction) : liveWeather.wind_direction) 
-                      : (language === 'en' ? 'South ↑' : 'Selatan ↑')}
+                    {liveWeather.wind_direction || '—'}
                   </span>
                 </div>
               </div>
@@ -1806,37 +1598,90 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Visibility' : 'Jarak Pandang'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {liveWeather.visibility_km || '< 9 km'}
+                    {liveWeather.visibility_km || '—'}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Right Zone: Summary & Early Warnings */}
-            <div className={`lg:col-span-4 flex flex-col justify-center gap-2.5 p-4 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
-              {liveWeather.alerts && liveWeather.alerts.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-[8px] font-bold text-rose-500 font-mono tracking-wider uppercase block">
-                    {language === 'en' ? 'Active Early Warnings:' : 'Peringatan Dini Aktif:'}
-                  </span>
-                  <div className={`p-2 rounded-lg border border-rose-500/15 bg-rose-500/5 text-[10px] ${isDark ? 'text-rose-300' : 'text-rose-700'} leading-relaxed space-y-1`}>
-                    {liveWeather.alerts.map((alert, i) => (
-                      <div key={i} className="flex items-start gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
-                        <span>{alert}</span>
-                      </div>
-                    ))}
-                  </div>
+            {/* Right Zone: Verbatim Upcoming 3-Hourly BMKG Forecast Slots */}
+            <div className={`lg:col-span-4 flex flex-col gap-2 p-3.5 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className={`text-[9px] font-bold uppercase tracking-[0.18em] font-mono ${themeTextMuted}`}>
+                  {language === 'en' ? 'Upcoming BMKG Forecast (WIB)' : 'Prakiraan BMKG Berikutnya (WIB)'}
+                </span>
+                <span className={`text-[8.5px] font-mono ${themeTextMuted}`}>
+                  {liveWeather.valid_at || '—'}
+                </span>
+              </div>
+
+              {Array.isArray(liveWeather.forecast_slots) && liveWeather.forecast_slots.length > 0 ? (
+                <div className="grid grid-cols-4 gap-2">
+                  {liveWeather.forecast_slots.map((slot, idx) => (
+                    <div
+                      key={`${slot.date_label}-${slot.time_wib}-${idx}`}
+                      title={`${slot.date_label} ${slot.time_wib} WIB · ${slot.condition} · ${slot.wind_speed_kph ?? '—'} km/j (${slot.wind_direction})`}
+                      className={`flex flex-col items-center justify-between py-2 px-1.5 rounded-lg border text-center ${
+                        isDark ? 'bg-white/[0.03] border-white/5' : 'bg-white border-slate-200/70'
+                      }`}
+                    >
+                      <span className={`text-[9.5px] font-mono font-bold tabular-nums ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                        {slot.time_wib}
+                      </span>
+                      {slot.weather_icon ? (
+                        <img
+                          src={slot.weather_icon}
+                          alt={slot.condition}
+                          className="w-7 h-7 my-1 object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <CloudRain className="w-5 h-5 my-1.5 text-sky-400" />
+                      )}
+                      <span className={`text-xs font-bold tabular-nums ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                        {slot.temperature_c}°
+                      </span>
+                      <span className={`text-[9px] font-mono tabular-nums ${themeTextMuted}`}>
+                        {typeof slot.humidity_percent === 'number' ? `${slot.humidity_percent}%` : '—'}
+                      </span>
+                      {typeof slot.precipitation_mm === 'number' && slot.precipitation_mm > 0 ? (
+                        <span className="text-[8.5px] font-mono font-semibold text-sky-400 tabular-nums mt-0.5">
+                          {slot.precipitation_mm.toLocaleString(language === 'en' ? 'en-US' : 'id-ID')} mm
+                        </span>
+                      ) : (
+                        <span className={`text-[8px] truncate max-w-full mt-0.5 ${themeTextMuted}`}>
+                          {slot.condition}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className={`text-[10px] font-mono py-3 text-center ${themeTextMuted}`}>
+                  {language === 'en'
+                    ? '3-hourly BMKG forecast slots unavailable in fallback mode.'
+                    : 'Slot prakiraan 3-jaman BMKG tidak tersedia pada mode fallback.'}
                 </div>
               )}
-              <p className={`text-[11px] font-sans leading-relaxed italic ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                "{formatWeatherSummary(liveWeather, language)}"
-              </p>
             </div>
           </div>
         ) : (
-          <div className={`text-center py-6 text-[10px] font-mono ${themeTextMuted}`}>
-            {language === 'en' ? 'Failed to load weather. Click sync button above.' : 'Gagal memuat info cuaca hulu. Klik tombol sync di atas.'}
+          <div className={`flex flex-col items-center justify-center gap-2 py-6 text-center`}>
+            <span className={`text-[10px] font-mono ${themeTextMuted}`}>
+              {weatherError || (language === 'en'
+                ? 'Official BMKG weather data is currently unavailable.'
+                : 'Data prakiraan cuaca resmi BMKG sedang tidak tersedia.')}
+            </span>
+            <button
+              onClick={() => fetchLiveWeather(language)}
+              className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-semibold border transition-colors cursor-pointer ${
+                isDark
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-200'
+                  : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-800'
+              }`}
+            >
+              {language === 'en' ? 'Retry BMKG Sync' : 'Coba Muat Ulang BMKG'}
+            </button>
           </div>
         )}
       </div>

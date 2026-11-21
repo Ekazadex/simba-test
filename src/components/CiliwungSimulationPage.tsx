@@ -3,6 +3,7 @@ import { Curve } from 'recharts';
 import { Map2D } from './CiliwungHardwareLiveView';
 import CiliwungOfficial3DView from './CiliwungOfficial3DView';
 import graphScale from './ciliwung-graph-scale.json';
+import { unlockAlertAudio } from '../utils/alarmAudio';
 
 type ScenarioId = 'ringan' | 'sedang' | 'lebat';
 type SpeedMultiplier = 1 | 10 | 25 | 50 | 150;
@@ -160,7 +161,10 @@ export default function CiliwungSimulationPage({
       onAlertStatusChange('Normal');
       return;
     }
-    const nodes = Array.isArray(state.cupNodes) ? state.cupNodes : [];
+    const nodes = [
+      ...(Array.isArray(state.cupNodes) ? state.cupNodes : []),
+      ...(Array.isArray(state.threeDNodes) ? state.threeDNodes : []),
+    ];
     const hasBahaya = nodes.some((n) => n.status === 'BANJIR_JAKARTA');
     const hasSiaga = nodes.some((n) => n.status === 'SIAGA');
     onAlertStatusChange(hasBahaya ? 'Bahaya' : hasSiaga ? 'Siaga' : 'Normal');
@@ -534,6 +538,7 @@ export default function CiliwungSimulationPage({
   }
 
   async function handleStart() {
+    unlockAlertAudio();
     if (selectedMode === 'rain_replay') {
       if (!selectedEpisodeId) return;
       await request('/api/ciliwung-simulation/replay/start', { episodeId: selectedEpisodeId, speedMultiplier: selectedSpeed });

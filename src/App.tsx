@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { db, auth, googleProvider, handleFirestoreError, OperationType } from './firebaseConfig';
 import { 
   onAuthStateChanged, 
@@ -25,6 +25,7 @@ import { extractReadingTimestamp, normalizeSensorReading } from './utils/reading
 import SCADADashboard from './components/SCADADashboard';
 import AdminPanel from './components/AdminPanel';
 import CiliwungSimulationPage from './components/CiliwungSimulationPage';
+import { playAlertAudio, playAlertPreviewChime, stopAlertAudio, unlockAlertAudio } from './utils/alarmAudio';
 import { 
   LayoutDashboard, 
   Sliders, 
@@ -138,12 +139,24 @@ export default function App() {
     return true;
   });
 
+  const currentAlertStatusRef = useRef<'Normal' | 'Siaga' | 'Bahaya'>('Normal');
+
   const handleToggleSound = () => {
     const next = !soundEnabled;
     setSoundEnabled(next);
     localStorage.setItem('scada_sound_enabled', String(next));
-    if (next && (window as any).__playAlertSound) {
-      (window as any).__playAlertSound('Siaga');
+    if (next) {
+      unlockAlertAudio();
+      const status = currentAlertStatusRef.current;
+      if (status === 'Bahaya' && prefSoundBahaya) {
+        playAlertAudio('Bahaya');
+      } else if (status === 'Siaga' && prefSoundSiaga) {
+        playAlertAudio('Siaga');
+      } else {
+        playAlertPreviewChime();
+      }
+    } else {
+      stopAlertAudio();
     }
   };
 
@@ -255,7 +268,7 @@ export default function App() {
     const q = query(
       collection(db, 'sensor_readings'),
       orderBy('timestamp', 'desc'),
-      limit(20)
+      limit(48)
     );
     const unsubscribe = onSnapshot(
       q,
@@ -438,6 +451,7 @@ export default function App() {
       currentAlertStatus = 'Siaga';
     }
   }
+  currentAlertStatusRef.current = currentAlertStatus;
 
   // Real-time audio-reactive or wave-pulsed overlay animation
   useEffect(() => {
@@ -478,6 +492,36 @@ export default function App() {
       cancelAnimationFrame(animId);
     };
   }, [currentAlertStatus]);
+
+  // Global SCADA Audio Alarm Loop across Dashboard, Simulasi 3D, and Kontrol PLC
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__playAlertSound = playAlertAudio;
+    }
+    if (!soundEnabled || currentAlertStatus === 'Normal') {
+      stopAlertAudio();
+      return;
+    }
+    if (currentAlertStatus === 'Siaga' && !prefSoundSiaga) {
+      stopAlertAudio();
+      return;
+    }
+    if (currentAlertStatus === 'Bahaya' && !prefSoundBahaya) {
+      stopAlertAudio();
+      return;
+    }
+
+    playAlertAudio(currentAlertStatus);
+  }, [soundEnabled, currentAlertStatus, prefSoundSiaga, prefSoundBahaya]);
+
+  useEffect(() => {
+    return () => {
+      stopAlertAudio();
+      if (typeof window !== 'undefined') {
+        delete (window as any).__playAlertSound;
+      }
+    };
+  }, []);
 
   // Setup standard background depending on dark/light mode
   const themeBg = isDark ? 'bg-[#0A0A0B]' : 'bg-[#F3F4F6]';
