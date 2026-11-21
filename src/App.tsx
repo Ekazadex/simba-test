@@ -45,6 +45,7 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react';
+import { apiUrl } from './utils/apiBase';
 
 const NODE_ID = 'node-kukusan-01';
 
@@ -53,7 +54,7 @@ export default function App() {
   const handleSelectTab = useCallback((nextTab: 'dashboard' | 'simulation' | 'admin') => {
     setActiveTab((prev) => {
       if (prev !== nextTab && (prev === 'simulation' || nextTab === 'simulation')) {
-        fetch('/api/ciliwung-mode', {
+        fetch(apiUrl('/api/ciliwung-mode'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: nextTab === 'simulation' ? 'simulation' : 'hardware' }),
@@ -256,12 +257,17 @@ export default function App() {
   const [simulationAlertStatus, setSimulationAlertStatus] = useState<'Normal' | 'Siaga' | 'Bahaya'>('Normal');
 
   const isRealEspSource = (src?: string | null) => {
-    const lower = (src || '').toLowerCase();
+    const lower = (src || '').toLowerCase().trim();
     if (!lower) return true;
-    if (lower.includes('simulat') || lower.includes('scenario') || lower.includes('manual') || lower === 'system') {
+    if (
+      lower.includes('simulat') ||
+      lower.includes('scenario') ||
+      lower.includes('manual') ||
+      lower === 'system'
+    ) {
       return false;
     }
-    return lower.includes('hardware') || lower.includes('esp') || lower === 'sensor';
+    return true;
   };
 
   useEffect(() => {
@@ -307,6 +313,9 @@ export default function App() {
 
   const handleLatestReadingChange = useCallback((reading: SensorReading | null) => {
     setLatestReading(reading);
+    if (reading && isRealEspSource(reading.source)) {
+      setRealEspReading(reading);
+    }
     if (reading && typeof reading.water_level === 'number') {
       setLatestLevel(reading.water_level);
     } else {
@@ -356,7 +365,7 @@ export default function App() {
     try {
       const cfgRef = doc(db, 'system_config', config?.node_id || NODE_ID);
       await setDoc(cfgRef, { auto_simulation: false, last_updated: Date.now() }, { merge: true }).catch(console.error);
-      await fetch('/api/sim-data/reset', { method: 'POST' });
+      await fetch(apiUrl('/api/sim-data/reset'), { method: 'POST' });
       // Reset local states cleanly
       setLatestReading(realEspReading);
       setLatestLevel(realEspReading?.water_level ?? 0);
@@ -425,31 +434,46 @@ export default function App() {
 
   const isDark = theme === 'dark';
 
-  // Determine alert status per active tab:
+  // Determine alert status per active tab (real-situation SCADA priority):
+  // - Real ESP32 hardware Siaga/Bahaya (when connected/online) ALWAYS persists across
+  //   Dashboard, Kontrol PLC (admin), AND Simulasi 3D so live emergencies are never silenced by tab switching!
   // - Dashboard: active telemetry (real ESP32 or admin simulation)
-  // - Kontrol PLC (admin): strictly REAL ESP32 hardware telemetry when online
-  // - Simulasi 3D (simulation): active 9-node / scenario simulation severity
+  // - Kontrol PLC (admin): live REAL ESP32 hardware telemetry when online
+  // - Simulasi 3D (simulation): higher severity between active simulation & real ESP32 hardware
   const thresholdSiaga = config ? config.threshold_siaga : 60;
   const thresholdBahaya = config ? config.threshold_bahaya : 90;
 
+  const severityRank = (s: 'Normal' | 'Siaga' | 'Bahaya') => (s === 'Bahaya' ? 2 : s === 'Siaga' ? 1 : 0);
+  const pickHigherSeverity = (
+    a: 'Normal' | 'Siaga' | 'Bahaya',
+    b: 'Normal' | 'Siaga' | 'Bahaya'
+  ): 'Normal' | 'Siaga' | 'Bahaya' => (severityRank(a) >= severityRank(b) ? a : b);
+
+  let realHardwareAlertStatus: 'Normal' | 'Siaga' | 'Bahaya' = 'Normal';
+  if (!isRealEspOffline && realEspReading) {
+    const realLevel = typeof realEspReading.water_level === 'number' ? realEspReading.water_level : 0;
+    if (realLevel >= thresholdBahaya) {
+      realHardwareAlertStatus = 'Bahaya';
+    } else if (realLevel >= thresholdSiaga) {
+      realHardwareAlertStatus = 'Siaga';
+    }
+  }
+
   let currentAlertStatus: 'Normal' | 'Siaga' | 'Bahaya' = 'Normal';
   if (activeTab === 'simulation') {
-    currentAlertStatus = simulationAlertStatus;
+    currentAlertStatus = pickHigherSeverity(simulationAlertStatus, realHardwareAlertStatus);
   } else if (activeTab === 'admin') {
-    const realLevel = realEspReading?.water_level ?? 0;
-    if (!isRealEspOffline && realEspReading) {
-      if (realLevel >= thresholdBahaya) {
-        currentAlertStatus = 'Bahaya';
-      } else if (realLevel >= thresholdSiaga) {
-        currentAlertStatus = 'Siaga';
+    currentAlertStatus = realHardwareAlertStatus;
+  } else {
+    let dashboardAlert: 'Normal' | 'Siaga' | 'Bahaya' = 'Normal';
+    if (!isAppDeviceOffline) {
+      if (latestLevel >= thresholdBahaya) {
+        dashboardAlert = 'Bahaya';
+      } else if (latestLevel >= thresholdSiaga) {
+        dashboardAlert = 'Siaga';
       }
     }
-  } else if (!isAppDeviceOffline) {
-    if (latestLevel >= thresholdBahaya) {
-      currentAlertStatus = 'Bahaya';
-    } else if (latestLevel >= thresholdSiaga) {
-      currentAlertStatus = 'Siaga';
-    }
+    currentAlertStatus = pickHigherSeverity(dashboardAlert, realHardwareAlertStatus);
   }
   currentAlertStatusRef.current = currentAlertStatus;
 

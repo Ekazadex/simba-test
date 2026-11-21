@@ -8,6 +8,7 @@ import { db, auth, handleFirestoreError, OperationType } from '../firebaseConfig
 import { doc, setDoc, updateDoc, collection, addDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { SystemConfig, SystemLog, SensorReading } from '../types';
 import { normalizeSensorReading } from '../utils/readingUtils';
+import { apiUrl } from '../utils/apiBase';
 import { 
   Sliders, 
   Play, 
@@ -440,7 +441,7 @@ export default function AdminPanel({
       await appendConsoleLog(`Konfigurasi ambang batas diperbarui: Siaga=${thresholdSiaga}cm, Bahaya=${thresholdBahaya}cm, Ref=${refHeight}cm`, 'info');
       
       // Request express server to immediately inject a matching simulated reading with the new config
-      await fetch('/api/sim-data', {
+      await fetch(apiUrl('/api/sim-data'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: simMode })
@@ -467,7 +468,7 @@ export default function AdminPanel({
           : `Memulai Skenario Manual: ${scenario === 'heavy_rain_flood' ? 'Hujan Deras -> Banjir Tinggi' : 'Surut Normal'} (Auto-Stop saat target tercapai)...`,
         'warn'
       );
-      const res = await fetch('/api/sim-data/scenario', {
+      const res = await fetch(apiUrl('/api/sim-data/scenario'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenario, action: 'start' })
@@ -496,7 +497,7 @@ export default function AdminPanel({
       const cfgRef = doc(db, 'system_config', config?.node_id || 'node-kukusan-01');
       await setDoc(cfgRef, { auto_simulation: true, last_updated: Date.now() }, { merge: true }).catch(console.error);
 
-      const res = await fetch('/api/sim-data', {
+      const res = await fetch(apiUrl('/api/sim-data'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ water_level: level, mode: 'custom' })
@@ -529,7 +530,7 @@ export default function AdminPanel({
       if (onResetSimulation) {
         await onResetSimulation();
       } else {
-        await fetch('/api/sim-data/reset', { method: 'POST' });
+        await fetch(apiUrl('/api/sim-data/reset'), { method: 'POST' });
       }
       await appendConsoleLog(
         language === 'en'
@@ -549,7 +550,7 @@ export default function AdminPanel({
 
   const handleStopScenario = async () => {
     try {
-      await fetch('/api/sim-data/scenario', {
+      await fetch(apiUrl('/api/sim-data/scenario'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'stop' })

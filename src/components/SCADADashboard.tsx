@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebaseConfig';
 import { playAlertPreviewChime } from '../utils/alarmAudio';
+import { apiUrl } from '../utils/apiBase';
 import { runLstmForecast } from '../ml/lstmEngine';
 import { collection, query, orderBy, limit, onSnapshot, doc, getDocs, where } from 'firebase/firestore';
 import { 
@@ -160,7 +161,7 @@ export default function SCADADashboard({
   const handleInjectQuickTest = async () => {
     setIsInjectingTestTelemetry(true);
     try {
-      await fetch('/api/sim-data', {
+      await fetch(apiUrl('/api/sim-data'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'dry', water_level: 35 })
@@ -457,7 +458,7 @@ export default function SCADADashboard({
         }
       };
 
-      const res = await fetch('/api/predict', {
+      const res = await fetch(apiUrl('/api/predict'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -507,7 +508,15 @@ export default function SCADADashboard({
     setLoadingWeather(true);
     setWeatherError(null);
     try {
-      const res = await fetch(`/api/live-weather?lang=${targetLang}`);
+      const res = await fetch(apiUrl(`/api/live-weather?lang=${targetLang}`));
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(
+          targetLang === 'en'
+            ? 'Backend API unreachable (check VITE_API_BASE_URL on Vercel → Railway).'
+            : 'Backend API tidak terjangkau (pastikan VITE_API_BASE_URL di Vercel diarahkan ke domain Railway).'
+        );
+      }
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || (targetLang === 'en'
@@ -828,118 +837,215 @@ export default function SCADADashboard({
     });
   }, [readingsList, rawBatch, hasBatchData, latestReading, config?.auto_simulation, thresholdSiaga, thresholdBahaya, refHeight]);
 
-  // Future Prediction Points (prefer live trained LSTM output over static Firestore document)
-  const predictionCurves = lstmForecast
-    ? [
-        { name: 'T+30m', prediksi: lstmForecast.prediction_30m },
-        { name: 'T+1h', prediksi: lstmForecast.prediction_1h },
-        { name: 'T+3h', prediksi: lstmForecast.prediction_3h },
-        { name: 'T+6h', prediksi: lstmForecast.prediction_6h },
-      ]
+  // Unified Historical + Trained LSTM Forecast Series (Single Source of Truth in Elevation Mode)
+  const activeForecast = lstmForecast
+    ? {
+        p30m: lstmForecast.prediction_30m,
+        p1h: lstmForecast.prediction_1h,
+        p3h: lstmForecast.prediction_3h,
+        p6h: lstmForecast.prediction_6h,
+      }
     : latestPrediction
-      ? [
-          { name: 'T+30m', prediksi: latestPrediction.prediction_30m },
-          { name: 'T+1h', prediksi: latestPrediction.prediction_1h },
-          { name: 'T+3h', prediksi: latestPrediction.prediction_3h },
-          { name: 'T+6h', prediksi: latestPrediction.prediction_6h },
-        ]
-      : [];
+      ? {
+          p30m: latestPrediction.prediction_30m,
+          p1h: latestPrediction.prediction_1h,
+          p3h: latestPrediction.prediction_3h,
+          p6h: latestPrediction.prediction_6h,
+        }
+      : null;
+
+  const lastHistoricalTimeLabel =
+    chartData.length > 0 ? chartData[chartData.length - 1].time : undefined;
+
+  const unifiedChartData = useMemo(() => {
+    if (chartViewMode !== 'elevation' || !activeForecast || chartData.length === 0) {
+      return chartData.map((pt) => ({ ...pt, prediksi: null as number | null }));
+    }
+    const base = chartData.map((pt, idx) => ({
+      ...pt,
+      prediksi: idx === chartData.length - 1 ? pt.elevasi : (null as number | null),
+    }));
+    return [
+      ...base,
+      {
+        time: 'T+30m',
+        elevasi: null as number | null,
+        raw_distance: null as number | null,
+        prediksi: activeForecast.p30m,
+        local_rain: 0,
+        suhu: latestReading?.temperature || 28,
+        source: 'LSTM Forecast',
+      },
+      {
+        time: language === 'en' ? 'T+1h' : 'T+1j',
+        elevasi: null as number | null,
+        raw_distance: null as number | null,
+        prediksi: activeForecast.p1h,
+        local_rain: 0,
+        suhu: latestReading?.temperature || 28,
+        source: 'LSTM Forecast',
+      },
+      {
+        time: language === 'en' ? 'T+3h' : 'T+3j',
+        elevasi: null as number | null,
+        raw_distance: null as number | null,
+        prediksi: activeForecast.p3h,
+        local_rain: 0,
+        suhu: latestReading?.temperature || 28,
+        source: 'LSTM Forecast',
+      },
+      {
+        time: language === 'en' ? 'T+6h' : 'T+6j',
+        elevasi: null as number | null,
+        raw_distance: null as number | null,
+        prediksi: activeForecast.p6h,
+        local_rain: 0,
+        suhu: latestReading?.temperature || 28,
+        source: 'LSTM Forecast',
+      },
+    ];
+  }, [chartData, chartViewMode, activeForecast, language, latestReading?.temperature]);
+
+  const elevationAxisMax = useMemo(() => {
+    const values = unifiedChartData.flatMap((d) => [
+      typeof d.elevasi === 'number' ? d.elevasi : 0,
+      typeof d.prediksi === 'number' ? d.prediksi : 0,
+    ]);
+    const peak = Math.max(160, thresholdBahaya + 30, ...values.map((v) => v + 20));
+    return Math.ceil(peak / 10) * 10;
+  }, [unifiedChartData, thresholdBahaya]);
+
+  const isHardwareLive = Boolean(latestReading?.source?.includes('Hardware') && !isDeviceOffline);
 
   return (
     <div id="scada-dashboard-root" className="grid grid-cols-1 lg:grid-cols-12 gap-6 pb-12">
-      
-      {/* HARDWARE DATA PAUSE & REAL-TIME QUOTA SAVER BANNER */}
-      <div id="scada-hardware-pause-banner" className={`col-span-12 p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
-        latestReading?.source?.includes('Hardware')
-          ? isDark ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-          : isDark ? 'bg-black/40 border-white/10 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
-      }`}>
-        <div className="flex items-center gap-3">
-          <span className="relative flex h-3 w-3 shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+
+      {/* ROW 1: COMPACT TELEMETRY STATUS STRIP + SINGLE SIMULATION CTA */}
+      <div
+        id="scada-hardware-pause-banner"
+        className={`col-span-12 px-5 py-3.5 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+          isHardwareLive
+            ? isDark
+              ? 'bg-emerald-950/20 border-emerald-500/25 text-emerald-300'
+              : 'bg-emerald-50/90 border-emerald-200 text-emerald-900'
+            : isDark
+              ? 'bg-[#0D0D0F] border-white/5 text-slate-300'
+              : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            {isHardwareLive && (
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            )}
+            <span
+              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                isHardwareLive
+                  ? 'bg-emerald-500'
+                  : config?.auto_simulation
+                    ? 'bg-amber-400'
+                    : 'bg-[#3B82F6]'
+              }`}
+            />
           </span>
-          <div className="text-xs">
-            <div className="flex items-center gap-2 font-mono font-bold tracking-wider uppercase">
-              {config?.auto_simulation && (latestReading?.source?.includes('Simulator') || latestReading?.source?.includes('Scenario')) ? (
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono font-semibold tracking-wide uppercase">
+              {config?.auto_simulation &&
+              (latestReading?.source?.includes('Simulator') || latestReading?.source?.includes('Scenario')) ? (
                 <>
-                  <Activity className="w-3.5 h-3.5 text-amber-400" />
-                  <span>{language === 'en' ? 'TELEMETRY SOURCE: SIMULATOR (CONTROLLED TEST MODE)' : 'SUMBER TELEMETRI: SIMULATOR (MODE PENGUJIAN)'}</span>
+                  <Activity className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>{language === 'en' ? 'Telemetry: Controlled Simulator' : 'Telemetri: Simulator Pengujian'}</span>
                 </>
-              ) : latestReading?.source?.includes('Hardware') && !isDeviceOffline ? (
+              ) : isHardwareLive ? (
                 <>
-                  <Radio className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{language === 'en' ? 'TELEMETRY SOURCE: ESP32 HARDWARE (360-SAMPLE BATCH)' : 'SUMBER TELEMETRI: HARDWARE ESP32 (BATCH 360 SAMPEL)'}</span>
+                  <Radio className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>{language === 'en' ? 'Telemetry: ESP32 Hardware Live' : 'Telemetri: Hardware ESP32 Aktif'}</span>
                 </>
               ) : (
                 <>
-                  <Activity className="w-3.5 h-3.5 text-[#3B82F6]" />
-                  <span>{language === 'en' ? 'MONITORING STATUS: STANDBY PAUSED (LATEST REPORT)' : 'STATUS MONITORING: STANDBY PAUSED (LAPORAN TERAKHIR)'}</span>
+                  <Activity className="w-3.5 h-3.5 text-[#3B82F6] shrink-0" />
+                  <span>{language === 'en' ? 'Monitoring: Standby (Latest Report)' : 'Monitoring: Standby (Laporan Terakhir)'}</span>
                 </>
               )}
+              {hasBatchData && (
+                <span className={`font-normal normal-case tracking-normal ${isDark ? 'text-emerald-400/90' : 'text-emerald-700'}`}>
+                  · {rawBatch.length || 360} {language === 'en' ? 'batch pts' : 'titik batch'}
+                </span>
+              )}
             </div>
-            <span className="text-[11px] opacity-80 mt-0.5 block font-sans">
-              {timeAgoText} — {language === 'en' 
-                ? 'No repeated Firestore reads. System stays paused on latest report until new transmission arrives.' 
-                : 'Tidak ada pembacaan Firestore berulang. Sistem tetap terjeda pada laporan terakhir hingga paket transmisi baru masuk.'}
-            </span>
+            <p className={`text-[11px] mt-0.5 font-sans truncate ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+              {timeAgoText} ·{' '}
+              {language === 'en'
+                ? 'Paused on latest telemetry until new transmission arrives.'
+                : 'Menampilkan laporan terakhir hingga paket transmisi baru diterima.'}
+            </p>
           </div>
         </div>
-        
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
-          {hasBatchData && (
-            <span className="px-2.5 py-1 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 rounded-lg text-[10px] font-mono font-bold shrink-0 flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              {language === 'en' ? `Array of ${rawBatch.length || 360} Points Ready` : `Array ${rawBatch.length || 360} Titik Siap Ditampilkan`}
-            </span>
-          )}
 
-          {/* Primary System Alert Level Badge (Neatly Integrated into Header Banner) */}
-          <div className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold uppercase tracking-wider ${alertBg}`}>
+        <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-end shrink-0">
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap shrink-0 ${alertBg}`}>
             <span className={`w-2 h-2 rounded-full ${alertLed} inline-block`} />
             <span className="font-mono">{alertLabel}</span>
           </div>
+
+          {onNavigateTab && (
+            <button
+              type="button"
+              onClick={() => onNavigateTab('simulation')}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#3B82F6] hover:bg-blue-400 px-3.5 py-1.5 text-xs font-bold text-black transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <span>{language === 'en' ? '9-Node Simulation' : 'Masuk Simulasi 9-Node'}</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* ROW 2: PRIMARY GAUGE (4 COLS) & LIVE ELEVATION CURVE (8 COLS) — MATCHED HEIGHT */}
+      {/* ROW 2: SPATIAL HERO — 2D/3D CILIWUNG CORRIDOR MAP (8 COLS) + LIVE WATER ELEVATION GAUGE (4 COLS) */}
       <div id="measurement-grid" className="col-span-12 grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        
-        {/* Core Gauge: Water Level Channel */}
-        <div id="water-gauge" className={`col-span-12 lg:col-span-4 h-full ${themeCard} rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between`}>
-          <div className="flex justify-between items-center mb-4">
-            <span className={`text-[10px] font-bold uppercase tracking-[0.25em] ${themeTextMuted} font-mono`}>
+
+        {/* Left 8 Cols: Interactive 2D/3D Corridor Map (Spatial Hero Above the Fold) */}
+        <div className="col-span-12 lg:col-span-8 flex flex-col">
+          <CiliwungHardwareLiveView
+            embeddedInDashboard
+            theme={theme}
+            language={language}
+            latestReading={latestReading}
+            readings={readingsList}
+            config={config || {}}
+            loadDayHistory={() => loadHardwareHistory24h(db, config?.reference_height || 300)}
+          />
+        </div>
+
+        {/* Right 4 Cols: Core Water Level Gauge & Physical Ultrasonic Cross-Section */}
+        <div id="water-gauge" className={`col-span-12 lg:col-span-4 h-full ${themeCard} rounded-2xl p-5 lg:p-6 relative overflow-hidden flex flex-col justify-between`}>
+          <div className="flex justify-between items-center gap-2 mb-3">
+            <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
               {language === 'en' ? 'Water Surface Elevation' : 'Tinggi Elevasi Air'}
             </span>
-            <div className="flex items-center gap-1.5">
-              {isDeviceOffline ? (
-                <span className="px-2.5 py-1 bg-slate-500/20 border border-slate-500/40 rounded-lg text-[10px] font-mono text-slate-400 font-bold tracking-wider uppercase flex items-center gap-1.5 shadow-sm">
-                  <span className="w-2 h-2 rounded-full bg-slate-400" />
-                  {language === 'en' ? 'DEVICE OFFLINE' : 'PERANGKAT OFFLINE'}
-                </span>
-              ) : latestReading?.source?.includes('Manual') || latestReading?.source?.includes('Peil') ? (
-                <span className="px-2.5 py-1 bg-amber-500/20 border border-amber-500/40 rounded-lg text-[10px] font-mono text-amber-400 font-bold tracking-wider uppercase flex items-center gap-1.5 shadow-sm">
-                  <ClipboardCheck className="w-3 h-3 text-amber-400" />
-                  MANUAL PEIL SCHAAL
-                </span>
-              ) : latestReading?.source?.includes('Hardware') ? (
-                <span className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/40 rounded-lg text-[10px] font-mono text-emerald-400 font-bold tracking-wider uppercase flex items-center gap-1.5 shadow-sm">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  LIVE HARDWARE
-                </span>
-              ) : !config?.auto_simulation ? (
-                <span className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[9px] font-mono text-amber-400 tracking-wider uppercase flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  STANDBY (READY FOR ESP32)
-                </span>
-              ) : (
-                <span className={`px-2 py-0.5 ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'} rounded text-[9px] font-mono text-[#3B82F6] tracking-wider uppercase`}>
-                  {language === 'en' ? 'SIMULATOR ACTIVE' : 'SIMULATOR AKTIF'}
-                </span>
-              )}
-            </div>
+            <span className={`text-[10px] font-mono uppercase tracking-wider whitespace-nowrap shrink-0 ${
+              isDeviceOffline
+                ? 'text-slate-400'
+                : latestReading?.source?.includes('Manual') || latestReading?.source?.includes('Peil')
+                  ? 'text-amber-400 font-semibold'
+                  : latestReading?.source?.includes('Hardware')
+                    ? 'text-emerald-400 font-semibold'
+                    : !config?.auto_simulation
+                      ? 'text-amber-400'
+                      : 'text-[#3B82F6]'
+            }`}>
+              {isDeviceOffline
+                ? (language === 'en' ? 'OFFLINE' : 'OFFLINE')
+                : latestReading?.source?.includes('Manual') || latestReading?.source?.includes('Peil')
+                  ? 'MANUAL PEIL'
+                  : latestReading?.source?.includes('Hardware')
+                    ? 'LIVE ESP32'
+                    : !config?.auto_simulation
+                      ? 'STANDBY'
+                      : 'SIMULATOR'}
+            </span>
           </div>
-          
+
           <div className="flex items-baseline justify-between gap-4">
             <div className="flex flex-col">
               <span className={`text-5xl font-sans font-light tracking-tighter leading-none tabular-nums ${isDark ? 'text-white' : 'text-slate-900'}`}>
@@ -952,31 +1058,30 @@ export default function SCADADashboard({
               <span className={`text-[11px] ${themeTextSub} mt-2 font-sans flex items-center gap-1.5`}>
                 {isDeviceOffline ? (
                   <span className="text-slate-400 font-mono">
-                    {language === 'en' ? 'Device offline (>15 mins). Telemetry paused on standby.' : 'Perangkat offline (>15 mnt). Data telemetri terakhir dibekukan.'}
+                    {language === 'en' ? 'Device offline (>15 mins). Telemetry paused.' : 'Perangkat offline (>15 mnt). Data dibekukan.'}
                   </span>
                 ) : (
                   <>
                     {latestReading && latestReading.water_level >= thresholdSiaga ? (
-                      <TrendingUp className="w-3.5 h-3.5 text-rose-500 animate-bounce" />
+                      <TrendingUp className="w-3.5 h-3.5 text-rose-500 shrink-0" />
                     ) : (
-                      <TrendingDown className="w-3.5 h-3.5 text-emerald-500" />
+                      <TrendingDown className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                     )}
                     {latestReading?.source?.includes('Manual') ? (
-                      <span className="text-amber-400 font-bold">
+                      <span className="text-amber-400 font-semibold">
                         {language === 'en' ? 'Staff: ' : 'Petugas: '}{latestReading.operator || (language === 'en' ? 'Field Staff' : 'Staf Lapangan')}
                       </span>
                     ) : latestReading?.distance != null ? (
                       language === 'en'
                         ? `Sensor Gap: ${latestReading.distance} cm (${latestReading.source || 'RTU'})`
-                        : `Jarak Pantul Sensor: ${latestReading.distance} cm (${latestReading.source || 'RTU'})`
+                        : `Jarak Sensor: ${latestReading.distance} cm (${latestReading.source || 'RTU'})`
                     ) : (
-                      language === 'en' ? 'Ultrasonic Echo Precision: ±0.1 cm' : 'Presisi Echo Ultrasonik: ±0.1 cm'
+                      language === 'en' ? 'Ultrasonic Precision: ±0.1 cm' : 'Presisi Ultrasonik: ±0.1 cm'
                     )}
                   </>
                 )}
               </span>
 
-              {/* Extra Field Notes if Manual Entry */}
               {latestReading?.source?.includes('Manual') && latestReading.notes && (
                 <div className="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-sans text-amber-300 leading-snug">
                   {latestReading.notes}
@@ -986,12 +1091,12 @@ export default function SCADADashboard({
           </div>
 
           {/* PHYSICAL CROSS-SECTION GAUGE DIAGRAM */}
-          <div className={`w-full h-60 ${isDark ? 'bg-black/50 border-white/5' : 'bg-slate-100/60 border-slate-200'} rounded-2xl border p-4 relative overflow-hidden flex flex-col justify-between mt-4 shadow-inner`}>
-            
+          <div className={`w-full flex-1 min-h-[250px] ${isDark ? 'bg-black/50 border-white/5' : 'bg-slate-100/60 border-slate-200'} rounded-xl border p-4 relative overflow-hidden flex flex-col justify-between mt-4 shadow-inner`}>
+
             {/* 1. Bridge/Beam concrete ceiling & Sensor Probe */}
             <div className="absolute top-0 left-0 right-0 h-7 bg-zinc-700 border-b border-zinc-600 flex items-center justify-center z-10 shadow-sm">
               <span className="text-[7px] font-mono text-zinc-300 tracking-widest uppercase">TIANG PIPA & LENGAN BOOM DRAINASE KUKUSAN</span>
-              
+
               {/* JSN-SR04T Sensor Probe Visual */}
               <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 w-10 h-5 bg-zinc-800 rounded-b-md border-x border-b border-zinc-600 flex justify-around items-center px-1">
                 <div className="w-3 h-3 rounded-full bg-zinc-700 border border-[#3B82F6]/30 flex items-center justify-center">
@@ -1012,28 +1117,24 @@ export default function SCADADashboard({
             </div>
 
             {/* 3. The Water Body & Animated Surface */}
-            <div 
+            <div
               className="absolute bottom-0 left-0 right-0 z-20"
-              style={{ 
+              style={{
                 height: `${Math.min(85, Math.max(15, (currentLevel / (config?.reference_height || 300)) * 100))}%`,
-                transition: 'height 1200ms cubic-bezier(0.4, 0, 0.2, 1)'
+                transition: 'height 1200ms cubic-bezier(0.4, 0, 0.2, 1)',
               }}
             >
-              {/* Animated wave header */}
               <div className="absolute top-0 left-0 right-0 h-4 -mt-3.5 pointer-events-none overflow-hidden">
                 <svg className="w-[200%] h-full fill-blue-500/30 animate-pulse" viewBox="0 0 1200 120" preserveAspectRatio="none">
                   <path d="M0,60 C150,100 350,20 500,60 C650,100 850,20 1000,60 L1200,60 L1200,120 L0,120 Z" />
                 </svg>
               </div>
 
-              {/* Main Water Body */}
               <div className={`w-full h-full ${
                 alertStatus === 'Bahaya' ? 'bg-gradient-to-t from-rose-600/80 to-rose-500/70 border-t-2 border-rose-400' :
                 alertStatus === 'Siaga' ? 'bg-gradient-to-t from-amber-600/80 to-amber-500/70 border-t-2 border-amber-400' :
                 'bg-gradient-to-t from-blue-600/80 to-blue-500/70 border-t-2 border-blue-400'
               } flex flex-col justify-end border-t shadow-inner`}>
-                
-                {/* Sandy/Soil Riverbed ground at the absolute bottom */}
                 <div className="w-full h-4 bg-amber-950/30 border-t border-amber-900/40 flex items-center justify-center">
                   <span className="text-[6px] font-mono text-amber-200/50 tracking-widest uppercase">
                     {language === 'en' ? 'RIVERBED BASELINE' : 'DASAR SUNGAI (RIVERBED)'}
@@ -1043,20 +1144,20 @@ export default function SCADADashboard({
             </div>
 
             {/* 4. Overlaid threshold markings (Siaga, Bahaya) */}
-            <div 
+            <div
               className="absolute left-0 right-0 border-t border-dashed border-amber-500/70 z-30 pointer-events-none"
-              style={{ 
-                bottom: `${(thresholdSiaga / (config?.reference_height || 300)) * 100}%` 
+              style={{
+                bottom: `${(thresholdSiaga / (config?.reference_height || 300)) * 100}%`,
               }}
             >
               <div className="bg-amber-500 text-black text-[6px] font-mono font-bold px-1.5 py-0.5 rounded absolute right-3 -top-2.5 shadow-sm uppercase tracking-wider">
                 {language === 'en' ? 'ALERT' : 'SIAGA'}: {thresholdSiaga} cm
               </div>
             </div>
-            <div 
+            <div
               className="absolute left-0 right-0 border-t border-dashed border-rose-500/80 z-30 pointer-events-none"
-              style={{ 
-                bottom: `${(thresholdBahaya / (config?.reference_height || 300)) * 100}%` 
+              style={{
+                bottom: `${(thresholdBahaya / (config?.reference_height || 300)) * 100}%`,
               }}
             >
               <div className="bg-rose-600 text-white text-[6px] font-mono font-bold px-1.5 py-0.5 rounded absolute right-3 -top-2.5 shadow-sm uppercase tracking-wider">
@@ -1071,7 +1172,7 @@ export default function SCADADashboard({
                   <span className="text-[6px] text-slate-400 block uppercase leading-none mb-0.5">
                     {language === 'en' ? 'Sensor Gap to Water (d)' : 'Jarak Sensor ke Air (d)'}
                   </span>
-                  <span className="text-[10px] font-bold text-sky-400 leading-none">
+                  <span className="text-[10px] font-bold text-sky-400 leading-none tabular-nums">
                     {isDeviceOffline ? '-- cm' : `${config ? Math.max(0, config.reference_height - currentLevel) : 300 - currentLevel} cm`}
                   </span>
                 </div>
@@ -1082,7 +1183,7 @@ export default function SCADADashboard({
                   <span className="text-[6px] text-slate-400 block uppercase leading-none mb-0.5">
                     {language === 'en' ? 'Water Elevation (h)' : 'Elevasi Air (h)'}
                   </span>
-                  <span className="text-[10px] font-bold text-emerald-400 leading-none">
+                  <span className="text-[10px] font-bold text-emerald-400 leading-none tabular-nums">
                     {isDeviceOffline ? '-- cm' : `${currentLevel} cm`}
                   </span>
                 </div>
@@ -1090,384 +1191,45 @@ export default function SCADADashboard({
             </div>
 
             {/* Total Height Tag */}
-            <div className="absolute bottom-5 left-3 bg-zinc-800/90 border border-zinc-700 text-[6px] font-mono text-zinc-300 px-1.5 py-0.5 rounded z-30 shadow-md">
+            <div className="absolute bottom-5 left-3 bg-zinc-800/90 border border-zinc-700 text-[6px] font-mono text-zinc-300 px-1.5 py-0.5 rounded z-30 shadow-md tabular-nums">
               H_REF: {config ? config.reference_height : 300} cm
             </div>
 
           </div>
 
-          <div className={`grid grid-cols-2 gap-2 mt-4 pt-3 border-t ${themeBorder} text-[10px] font-mono`}>
+          <div className={`grid grid-cols-2 gap-2 mt-4 pt-3 border-t ${themeBorder} text-[10px] font-mono tabular-nums`}>
             <div className="flex flex-col">
-              <span className={themeTextMuted}>{language === 'en' ? 'Alert Threshold:' : 'Ambang Siaga:'}</span>
+              <span className={themeTextMuted}>{language === 'en' ? 'Alert Threshold' : 'Ambang Siaga'}</span>
               <span className="text-amber-500 font-semibold mt-0.5">{thresholdSiaga} cm</span>
             </div>
             <div className="flex flex-col">
-              <span className={themeTextMuted}>{language === 'en' ? 'Danger Threshold:' : 'Ambang Bahaya:'}</span>
+              <span className={themeTextMuted}>{language === 'en' ? 'Danger Threshold' : 'Ambang Bahaya'}</span>
               <span className="text-rose-500 font-semibold mt-0.5">{thresholdBahaya} cm</span>
             </div>
           </div>
         </div>
-
-        {/* Real-time & Historical Plot */}
-        <div id="scada-charts-forecasts" className="col-span-12 lg:col-span-8 flex flex-col">
-          <div id="scada-plot-container" className={`h-full ${themeCard} rounded-2xl p-6 flex flex-col justify-between`}>
-            <div className="flex flex-col gap-3 mb-4">
-              <div className="flex flex-wrap justify-between items-center gap-2">
-                <span className={`text-[10px] font-bold uppercase tracking-[0.25em] ${themeTextMuted} font-mono`}>
-                  {language === 'en' ? 'Live Water Elevation Curve vs Critical Limits' : 'Kurva Elevasi Air Terkini vs Batas Kritis'}
-                </span>
-
-                <div className="flex items-center gap-3 flex-wrap">
-                  {chartViewMode === 'elevation' ? (
-                    <>
-                      <span className={`text-[9px] ${themeTextMuted} flex items-center gap-1 font-mono uppercase tracking-wider`}>
-                        <span className="w-2 h-2 rounded-full bg-[#3B82F6] inline-block" /> {language === 'en' ? 'Elevation (h)' : 'Elevasi Air (h)'}
-                      </span>
-                      <span className={`text-[9px] ${themeTextMuted} flex items-center gap-1 font-mono uppercase tracking-wider`}>
-                        <span className="w-2.5 h-0.5 bg-amber-500/80 inline-block border-t border-dashed" /> {language === 'en' ? 'Alert Limit' : 'Batas Siaga'}
-                      </span>
-                      <span className={`text-[9px] ${themeTextMuted} flex items-center gap-1 font-mono uppercase tracking-wider`}>
-                        <span className="w-2.5 h-0.5 bg-rose-500/80 inline-block border-t border-dashed" /> {language === 'en' ? 'Danger Limit' : 'Batas Bahaya'}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-[9px] text-emerald-400 flex items-center gap-1 font-mono uppercase tracking-wider">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" /> {language === 'en' ? 'Sensor Distance (d)' : 'Jarak Sensor ke Air (cm)'}
-                      </span>
-                      <span className={`text-[9px] ${themeTextMuted} flex items-center gap-1 font-mono uppercase tracking-wider`}>
-                        <span className="w-2.5 h-0.5 bg-zinc-500 inline-block border-t border-dashed" /> H_REF: {config?.reference_height || 300}cm
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Toggle Mode: Elevasi vs Raw Ultrasonik */}
-                  <div className={`flex items-center gap-1 border ${isDark ? 'border-white/5 bg-black/25' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
-                    <button
-                      id="btn-mode-elevation"
-                      onClick={() => setChartViewMode('elevation')}
-                      className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
-                        chartViewMode === 'elevation'
-                          ? 'bg-[#3B82F6] text-black font-bold'
-                          : `${themeTextSub} hover:text-[#3B82F6]`
-                      }`}
-                      title={language === 'en' ? 'Show Water Surface Elevation (TMA) in cm' : 'Tampilkan grafik Tinggi Elevasi Muka Air (TMA) dalam cm'}
-                    >
-                      {language === 'en' ? 'Elevation (TMA)' : 'Elevasi Air (TMA)'}
-                    </button>
-                    <button
-                      id="btn-mode-raw"
-                      onClick={() => setChartViewMode('raw_ultrasonic')}
-                      className={`px-2.5 py-1 rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
-                        chartViewMode === 'raw_ultrasonic'
-                          ? 'bg-emerald-500 text-black font-bold'
-                          : `${themeTextSub} hover:text-emerald-400`
-                      }`}
-                      title={language === 'en' ? 'Show raw JSN-SR04T reflection distance in cm' : 'Tampilkan data mentah jarak pantul sensor ultrasonik JSN-SR04T (cm)'}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      {language === 'en' ? 'Raw Ultrasonic (d)' : 'Raw Ultrasonik (d)'}
-                    </button>
-                  </div>
-
-                  <div className={`flex items-center gap-1 border ${isDark ? 'border-white/5 bg-black/25' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
-                    <button 
-                      id="btn-range-realtime"
-                      onClick={() => {
-                        setUseBatch360Mode(false);
-                        setChartRange('realtime');
-                      }}
-                      className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${(!useBatch360Mode && chartRange === 'realtime') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
-                      title={language === 'en' ? 'High resolution chart showing last 20 telemetry readings' : 'Grafik resolusi tinggi menampilkan 20 pembacaan telemetri terakhir'}
-                    >
-                      {language === 'en' ? 'Real-time (20 Pts)' : 'Terkini (20 Poin)'}
-                    </button>
-                    <button 
-                      id="btn-range-24h"
-                      onClick={() => {
-                        setUseBatch360Mode(false);
-                        setChartRange('24h');
-                      }}
-                      className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${(!useBatch360Mode && chartRange === '24h') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
-                      title={language === 'en' ? 'Cumulative 24-hour water elevation trend' : 'Grafik histori elevasi air akumulatif dari 24 jam terakhir'}
-                    >
-                      {language === 'en' ? '24h Trend' : 'Tren 24 Jam'}
-                    </button>
-                    <button 
-                      id="btn-range-batch360"
-                      onClick={() => setUseBatch360Mode(!useBatch360Mode)}
-                      className={`px-2.5 py-1 rounded-md transition-all cursor-pointer flex items-center gap-1 ${useBatch360Mode ? 'bg-emerald-500 text-black font-bold' : `${themeTextSub} hover:text-emerald-400`}`}
-                      title={language === 'en' ? 'Visualize 360 continuous sample array in 1 ESP32 batch' : 'Tampilkan visualisasi 360 array sampel kontinu dalam 1 siklus batch ESP32'}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${useBatch360Mode ? 'bg-black' : 'bg-emerald-400 animate-pulse'}`} />
-                      {language === 'en' ? '360-Pt Batch' : 'Batch 360 Titik'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Export Data Button */}
-                <div className="relative">
-                  <button
-                    id="btn-export-csv"
-                    onClick={handleExportCSV}
-                    disabled={isExportingCSV}
-                    title={language === 'en' ? 'Export last 24 hours sensor logs to CSV' : 'Ekspor Log Sensor 24 Jam Terakhir ke format CSV'}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 border text-[10px] font-mono rounded-lg transition-all cursor-pointer ${
-                      isDark 
-                        ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' 
-                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm'
-                    } ${isExportingCSV ? 'opacity-50 cursor-wait' : ''}`}
-                  >
-                    {isExportingCSV ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#3B82F6]" />
-                    ) : (
-                      <Download className="w-3.5 h-3.5 text-[#3B82F6]" />
-                    )}
-                    <span className="font-bold">
-                      {isExportingCSV 
-                        ? (language === 'en' ? 'QUERYING 24H...' : 'MENGAMBIL 24 JAM...') 
-                        : (language === 'en' ? 'EXPORT CSV' : 'EXPORT DATA')}
-                    </span>
-                  </button>
-
-                  {exportNotice && (
-                    <div className="absolute right-0 top-full mt-2 w-72 p-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-lg text-[10px] font-sans shadow-xl z-50 animate-in fade-in slide-in-from-top-1">
-                      <div className="flex items-start gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                        <span>{exportNotice}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="w-full flex-1 min-h-[290px]">
-              {!hasReceivedReadingsSnapshot ? (
-                <div className={`w-full h-full min-h-[290px] flex flex-col items-center justify-center ${themeTextMuted} font-mono text-[10px] uppercase tracking-widest`}>
-                  <RefreshCw className="w-5 h-5 animate-spin text-[#3B82F6] mb-3" />
-                  {language === 'en' ? 'Connecting to telemetry database...' : 'Menghubungkan ke basis data telemetri...'}
-                </div>
-              ) : chartData.length === 0 ? (
-                <div className={`w-full h-full min-h-[290px] flex flex-col items-center justify-center p-6 text-center rounded-xl border border-dashed ${isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-3 shadow-sm">
-                    <Activity className="w-6 h-6 animate-pulse" />
-                  </div>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping inline-block" />
-                    <span className="font-mono text-xs font-bold uppercase tracking-wider text-amber-400">
-                      {language === 'en' ? 'TELEMETRY STANDBY — AWAITING ESP32' : 'STATUS TELEMETRI: STANDBY (MENUNGGU TRANSMISI ESP32)'}
-                    </span>
-                  </div>
-                  <p className={`text-xs max-w-lg mb-4 font-sans leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    {language === 'en'
-                      ? 'Database is active and ready. Currently no telemetry packets in sensor database (device in standby or simulation was recently reset). The curve will automatically plot once ESP32 transmits data.'
-                      : 'Database aktif dan siap menerima data. Saat ini belum ada data sensor yang masuk dari ESP32 (perangkat standby/offline atau simulasi baru saja direset). Grafik akan langsung tergambar otomatis saat ESP32 mengirim data.'}
-                  </p>
-                  <div className="flex flex-wrap items-center justify-center gap-3">
-                    <button
-                      type="button"
-                      onClick={handleInjectQuickTest}
-                      disabled={isInjectingTestTelemetry}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-[#3B82F6] hover:bg-blue-400 text-black transition-all shadow-md cursor-pointer disabled:opacity-50"
-                    >
-                      {isInjectingTestTelemetry ? (
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Zap className="w-3.5 h-3.5" />
-                      )}
-                      <span>{language === 'en' ? 'Test Chart (Sample 35 cm)' : 'Uji Grafik (Sampel 35 cm)'}</span>
-                    </button>
-                    {onNavigateTab && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateTab('admin')}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
-                          isDark 
-                            ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' 
-                            : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
-                        }`}
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5 text-[#3B82F6]" />
-                        <span>{language === 'en' ? 'Open PLC Simulation Panel' : 'Buka Kontrol PLC & Simulasi'}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="colorLevel" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.15}/>
-                        <stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="colorRaw" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke={themeGridColor} />
-                    <XAxis dataKey="time" stroke="#52525B" style={{ fontSize: 9, fontFamily: 'monospace' }} />
-                    <YAxis 
-                      domain={chartViewMode === 'elevation' ? [0, 160] : [0, Math.max(300, (config?.reference_height || 300) + 20)]} 
-                      stroke="#52525B" 
-                      style={{ fontSize: 9, fontFamily: 'monospace' }} 
-                    />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: isDark ? '#0D0D0F' : '#ffffff', borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0', borderRadius: '8px' }}
-                      labelStyle={{ color: isDark ? '#94a3b8' : '#475569', fontWeight: 'bold', fontSize: 10, fontFamily: 'monospace' }}
-                      itemStyle={{ color: isDark ? '#fff' : '#0f172a', fontSize: 11 }}
-                    />
-                    {chartViewMode === 'elevation' ? (
-                      <>
-                        <Area type="monotone" dataKey="elevasi" name={language === 'en' ? "Water Level (cm)" : "Elevasi Air (cm)"} stroke="#3B82F6" strokeWidth={1.5} fillOpacity={1} fill="url(#colorLevel)" />
-                        <ReferenceLine y={thresholdSiaga} stroke="#f59e0b" strokeDasharray="4 4" strokeWidth={1.2} label={{ value: language === 'en' ? 'ALERT' : 'SIAGA', fill: '#f59e0b', fontSize: 8, position: 'right', fontFamily: 'monospace' }} />
-                        <ReferenceLine y={thresholdBahaya} stroke="#f43f5e" strokeDasharray="4 4" strokeWidth={1.2} label={{ value: language === 'en' ? 'DANGER' : 'BAHAYA', fill: '#f43f5e', fontSize: 8, position: 'right', fontFamily: 'monospace' }} />
-                      </>
-                    ) : (
-                      <>
-                        <Area type="monotone" dataKey="raw_distance" name={language === 'en' ? "Raw Sensor Gap (cm)" : "Raw Jarak Ultrasonik (cm)"} stroke="#10B981" strokeWidth={1.5} fillOpacity={1} fill="url(#colorRaw)" />
-                        <ReferenceLine y={config?.reference_height || 300} stroke="#71717A" strokeDasharray="3 3" strokeWidth={1} label={{ value: 'TIANG/REF', fill: '#71717A', fontSize: 8, position: 'right', fontFamily: 'monospace' }} />
-                      </>
-                    )}
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-
       </div>
 
-      {/* ROW 3: SYMMETRICAL 4-COLUMN TRAINED LSTM PROGNOSTIC FORECAST HORIZONS */}
-      <div id="processed-forecast-panel" className="col-span-12 flex flex-col gap-3">
-        <div className={`flex flex-wrap items-center justify-between gap-2 px-1`}>
-          <div className="flex flex-col">
-            <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
-              {language === 'en' ? 'LSTM Elevation Forecast (Trained Neural Network)' : 'Prediksi Elevasi LSTM (Model Terlatih)'}
-            </span>
-            <span className="font-mono text-[9px] text-[#3B82F6] tracking-wider mt-0.5">
-              {lstmForecast
-                ? `${lstmForecast.modelMeta.sourceFile} // ${lstmForecast.modelMeta.architecture} • ${lstmForecast.modelMeta.totalParams.toLocaleString('id-ID')} params • MAE ${lstmForecast.modelMeta.maeCm} cm`
-                : 'model_lstm_banjir.h5 // Menunggu data telemetri sensor...'}
-            </span>
-          </div>
-          {lstmForecast && (
-            <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
-              <span className={`px-2 py-0.5 rounded-md border ${isDark ? 'bg-white/[0.03] border-white/10 text-zinc-400' : 'bg-slate-50 border-slate-200 text-slate-600'} tabular-nums`}>
-                WINDOW: {lstmForecast.inputCount}/24
-              </span>
-              <span className={`px-2 py-0.5 rounded-md border ${isDark ? 'bg-white/[0.03] border-white/10 text-zinc-400' : 'bg-slate-50 border-slate-200 text-slate-600'} tabular-nums`}>
-                {lstmForecast.inferenceMs.toFixed(1)} ms
-              </span>
-              <span className={`px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${
-                lstmForecast.status === 'Bahaya'
-                  ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
-                  : lstmForecast.status === 'Siaga'
-                    ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
-                    : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
-              }`}>
-                {language === 'en' ? `6H OUTLOOK: ${lstmForecast.status}` : `PROYEKSI 6J: ${lstmForecast.status === 'Normal' ? 'AMAN' : lstmForecast.status.toUpperCase()}`}
-              </span>
-            </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {[
-            {
-              label: 'Horizon T+30m',
-              value: lstmForecast ? lstmForecast.prediction_30m : latestPrediction?.prediction_30m,
-              conf: lstmForecast ? lstmForecast.confidence_30m : latestPrediction?.confidence_score,
-              iconClass: themeTextMuted,
-              badgeClass: 'text-[#3B82F6] bg-[#3B82F6]/5 border-[#3B82F6]/15',
-            },
-            {
-              label: language === 'en' ? 'Horizon T+1 Hour' : 'Horizon T+1 Jam',
-              value: lstmForecast ? lstmForecast.prediction_1h : latestPrediction?.prediction_1h,
-              conf: lstmForecast ? lstmForecast.confidence_1h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.95) : undefined),
-              iconClass: 'text-[#3B82F6]',
-              badgeClass: 'text-[#3B82F6] bg-[#3B82F6]/5 border-[#3B82F6]/15',
-            },
-            {
-              label: language === 'en' ? 'Horizon T+3 Hours' : 'Horizon T+3 Jam',
-              value: lstmForecast ? lstmForecast.prediction_3h : latestPrediction?.prediction_3h,
-              conf: lstmForecast ? lstmForecast.confidence_3h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.88) : undefined),
-              iconClass: 'text-purple-400',
-              badgeClass: 'text-purple-400 bg-purple-950/15 border-purple-800/20',
-            },
-            {
-              label: language === 'en' ? 'Horizon T+6 Hours' : 'Horizon T+6 Jam',
-              value: lstmForecast ? lstmForecast.prediction_6h : latestPrediction?.prediction_6h,
-              conf: lstmForecast ? lstmForecast.confidence_6h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.78) : undefined),
-              iconClass: 'text-amber-400',
-              badgeClass: 'text-amber-400 bg-amber-950/15 border-amber-800/20',
-            },
-          ].map((card) => {
-            const delta =
-              lstmForecast && typeof card.value === 'number'
-                ? Math.round((card.value - lstmForecast.currentLevel) * 10) / 10
-                : null;
-            const deltaColor =
-              delta === null
-                ? themeTextMuted
-                : delta > 0.5
-                  ? 'text-amber-400'
-                  : delta < -0.5
-                    ? 'text-emerald-400'
-                    : themeTextMuted;
-
-            return (
-              <div key={card.label} className={`${themeCard} rounded-2xl p-5 flex flex-col justify-between`}>
-                <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9px] uppercase tracking-widest`}>
-                  <span>{card.label}</span>
-                  <Clock className={`w-3.5 h-3.5 ${card.iconClass}`} />
-                </div>
-                <div className="my-3 flex items-baseline justify-between gap-2">
-                  <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {typeof card.value === 'number' ? card.value.toFixed(1) : '--'}{' '}
-                    <span className="text-xs font-normal text-slate-400">cm</span>
-                  </span>
-                  {delta !== null && (
-                    <span className={`font-mono text-[10px] tabular-nums ${deltaColor}`}>
-                      {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} cm
-                    </span>
-                  )}
-                </div>
-                <div className={`text-[10px] font-mono border rounded py-1 text-center tabular-nums ${card.badgeClass}`}>
-                  CONF: {typeof card.conf === 'number' ? `${card.conf}%` : '--%'}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ROW 4: OFFICIAL BMKG PUBLIC API WEATHER FORECAST */}
-      <div id="bmkg-gauge" className={`col-span-12 ${themeCard} rounded-2xl p-6 relative overflow-hidden`}>
+      {/* ROW 3: OFFICIAL BMKG PUBLIC API WEATHER FORECAST */}
+      <div id="bmkg-gauge" className={`col-span-12 ${themeCard} rounded-2xl p-5 lg:p-6 relative overflow-hidden`}>
         <div className={`flex flex-wrap justify-between items-center gap-3 pb-4 mb-5 border-b ${themeBorder}`}>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex flex-col">
-              <span className={`text-[10px] font-bold uppercase tracking-[0.25em] ${themeTextMuted} font-mono`}>
+              <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
                 {language === 'en' ? 'Official BMKG Weather Forecast' : 'Prakiraan Cuaca Resmi BMKG'}
               </span>
-              <span className="font-mono text-[8px] text-[#3B82F6] uppercase tracking-wider mt-0.5">
+              <span className="font-mono text-[10px] text-[#3B82F6] tracking-wide mt-0.5">
                 {liveWeather?.source === 'Open-Meteo'
-                  ? (language === 'en' ? 'Open-Meteo Live Fallback // BMKG Feed Currently Empty' : 'Fallback Open-Meteo // Feed API BMKG Sedang Kosong')
-                  : `API PUBLIK BMKG // ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
+                  ? (language === 'en' ? 'Open-Meteo Live Fallback · BMKG Feed Currently Empty' : 'Fallback Open-Meteo · Feed API BMKG Sedang Kosong')
+                  : `API Publik BMKG · ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
               </span>
             </div>
             {liveWeather?.valid_hour_wib && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/20 text-[9px] font-bold uppercase tracking-wider text-sky-500 font-mono">
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-sky-400 font-mono">
                 <span>
-                  {language === 'en'
-                    ? `SLOT ${liveWeather.valid_hour_wib}`
-                    : `PRAKIRAAN ${liveWeather.valid_hour_wib}`}
+                  · {language === 'en'
+                    ? `Slot ${liveWeather.valid_hour_wib}`
+                    : `Prakiraan ${liveWeather.valid_hour_wib}`}
                 </span>
                 <span
                   title={
@@ -1484,7 +1246,7 @@ export default function SCADADashboard({
 
           <div className="flex items-center gap-3">
             {liveWeather?.last_updated && (
-              <span className={`text-[9px] font-mono ${themeTextMuted}`}>
+              <span className={`text-[10px] font-mono tabular-nums ${themeTextMuted}`}>
                 {language === 'en' ? 'Synced: ' : 'Disinkronkan: '}{liveWeather.last_updated}
               </span>
             )}
@@ -1503,7 +1265,7 @@ export default function SCADADashboard({
         {loadingWeather ? (
           <div className="py-6 flex flex-col items-center justify-center">
             <RefreshCw className="w-5 h-5 animate-spin text-[#3B82F6] mb-2" />
-            <span className={`text-[9px] font-mono uppercase tracking-wider ${themeTextMuted} text-center px-4`}>
+            <span className={`text-[10px] font-mono uppercase tracking-wider ${themeTextMuted} text-center px-4`}>
               {language === 'en'
                 ? 'Fetching official weather forecast from BMKG public API...'
                 : 'Mengambil data prakiraan cuaca resmi dari API publik BMKG...'}
@@ -1538,7 +1300,7 @@ export default function SCADADashboard({
                 <span className={`text-[11px] ${themeTextSub} block mt-1 truncate`}>
                   {language === 'en' ? 'in ' : 'di '}{liveWeather.location_name}
                 </span>
-                <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] ${themeTextMuted} font-mono mt-1`}>
+                <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] ${themeTextMuted} font-mono mt-1 tabular-nums`}>
                   <span>
                     {language === 'en' ? 'Precip: ' : 'Curah hujan: '}{liveWeather.precipitation_mm ?? '—'}
                   </span>
@@ -1553,11 +1315,11 @@ export default function SCADADashboard({
 
             {/* Middle Zone: 2x2 Verbatim Atmospheric Telemetry Grid */}
             <div className="lg:col-span-4 grid grid-cols-2 gap-2.5">
-              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
+              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
                 <div className="text-sky-500 p-1.5 bg-sky-500/10 rounded-lg shrink-0">
                   <Droplet className="w-3.5 h-3.5" />
                 </div>
-                <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
+                <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Humidity' : 'Kelembapan'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
                     {typeof liveWeather.humidity_percent === 'number' ? `${liveWeather.humidity_percent}%` : '—'}
@@ -1565,11 +1327,11 @@ export default function SCADADashboard({
                 </div>
               </div>
 
-              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
+              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
                 <div className="text-[#3B82F6] p-1.5 bg-blue-500/10 rounded-lg shrink-0">
                   <Wind className="w-3.5 h-3.5" />
                 </div>
-                <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
+                <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Wind Speed' : 'Kecepatan Angin'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
                     {typeof liveWeather.wind_speed_kph === 'number'
@@ -1579,11 +1341,11 @@ export default function SCADADashboard({
                 </div>
               </div>
 
-              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
+              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
                 <div className="text-indigo-400 p-1.5 bg-indigo-500/10 rounded-lg shrink-0">
                   <Compass className="w-3.5 h-3.5" />
                 </div>
-                <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
+                <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Wind Direction' : 'Arah Angin'}</span>
                   <span className={`font-bold mt-0.5 truncate ${isDark ? 'text-white' : 'text-slate-800'}`}>
                     {liveWeather.wind_direction || '—'}
@@ -1591,11 +1353,11 @@ export default function SCADADashboard({
                 </div>
               </div>
 
-              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
+              <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
                 <div className="text-emerald-500 p-1.5 bg-emerald-500/10 rounded-lg shrink-0">
                   <Eye className="w-3.5 h-3.5" />
                 </div>
-                <div className="flex flex-col text-[9.5px] leading-tight min-w-0">
+                <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Visibility' : 'Jarak Pandang'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
                     {liveWeather.visibility_km || '—'}
@@ -1612,7 +1374,7 @@ export default function SCADADashboard({
                     ? (language === 'en' ? 'Upcoming 3-Hourly Forecast (WIB)' : 'Prakiraan 3-Jaman Berikutnya (WIB)')
                     : (language === 'en' ? 'Upcoming BMKG Forecast (WIB)' : 'Prakiraan BMKG Berikutnya (WIB)')}
                 </span>
-                <span className={`text-[8.5px] font-mono ${themeTextMuted}`}>
+                <span className={`text-[9px] font-mono tabular-nums ${themeTextMuted}`}>
                   {liveWeather.valid_at || '—'}
                 </span>
               </div>
@@ -1668,7 +1430,7 @@ export default function SCADADashboard({
             </div>
           </div>
         ) : (
-          <div className={`flex flex-col items-center justify-center gap-2 py-6 text-center`}>
+          <div className="flex flex-col items-center justify-center gap-2 py-6 text-center">
             <span className={`text-[10px] font-mono ${themeTextMuted}`}>
               {weatherError || (language === 'en'
                 ? 'Official BMKG weather data is currently unavailable.'
@@ -1688,16 +1450,452 @@ export default function SCADADashboard({
         )}
       </div>
 
-      {/* KEMBARAN DIGITAL KORIDOR CILIWUNG 2D / 3D / GRAFIK PREDIKSI +30M */}
-      <CiliwungHardwareLiveView
-        theme={theme}
-        language={language}
-        latestReading={latestReading}
-        readings={readingsList}
-        config={config || {}}
-        loadDayHistory={() => loadHardwareHistory24h(db, config?.reference_height || 300)}
-        onEnterSimulation={onNavigateTab ? () => onNavigateTab('simulation') : undefined}
-      />
+      {/* ROW 4: UNIFIED SCADA TELEMETRY CURVE + TRAINED LSTM FORECAST (SINGLE SOURCE OF TRUTH) */}
+      <div id="scada-charts-forecasts" className="col-span-12">
+        <div id="scada-plot-container" className={`${themeCard} rounded-2xl p-5 lg:p-6 flex flex-col gap-6`}>
+
+          {/* Chart Header & Controls */}
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap justify-between items-center gap-2">
+              <div>
+                <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
+                  {language === 'en'
+                    ? 'Unified SCADA Telemetry & LSTM Forecast Curve'
+                    : 'Kurva Elevasi Air SCADA & Prediksi LSTM Terpadu'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3.5 flex-wrap">
+                {chartViewMode === 'elevation' ? (
+                  <>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-2.5 h-0.5 bg-[#3B82F6] inline-block" /> {language === 'en' ? 'Actual (h)' : 'Aktual (h)'}
+                    </span>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-3 h-0.5 border-t-2 border-dashed border-violet-400 inline-block" /> {language === 'en' ? 'LSTM Forecast' : 'Prediksi LSTM'}
+                    </span>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-2.5 h-0.5 border-t border-dashed border-amber-500 inline-block" /> {language === 'en' ? 'Alert' : 'Siaga'}
+                    </span>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-2.5 h-0.5 border-t border-dashed border-rose-500 inline-block" /> {language === 'en' ? 'Danger' : 'Bahaya'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[10px] text-emerald-400 flex items-center gap-1.5 font-mono uppercase tracking-wider">
+                      <span className="w-2.5 h-0.5 bg-emerald-500 inline-block" /> {language === 'en' ? 'Sensor Distance (d)' : 'Jarak Sensor (cm)'}
+                    </span>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-2.5 h-0.5 border-t border-dashed border-zinc-500 inline-block" /> H_REF: {config?.reference_height || 300} cm
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Mode Toggle: Elevasi vs Raw Ultrasonik */}
+                <div className={`flex items-center gap-1 border ${isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
+                  <button
+                    id="btn-mode-elevation"
+                    onClick={() => setChartViewMode('elevation')}
+                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      chartViewMode === 'elevation'
+                        ? 'bg-[#3B82F6] text-black font-bold'
+                        : `${themeTextSub} hover:text-[#3B82F6]`
+                    }`}
+                    title={language === 'en' ? 'Show Water Surface Elevation (TMA) + LSTM forecast' : 'Tampilkan Elevasi Muka Air (TMA) + kurva prediksi LSTM'}
+                  >
+                    {language === 'en' ? 'Elevation (TMA) + LSTM' : 'Elevasi Air (TMA) + LSTM'}
+                  </button>
+                  <button
+                    id="btn-mode-raw"
+                    onClick={() => setChartViewMode('raw_ultrasonic')}
+                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      chartViewMode === 'raw_ultrasonic'
+                        ? 'bg-emerald-500 text-black font-bold'
+                        : `${themeTextSub} hover:text-emerald-400`
+                    }`}
+                    title={language === 'en' ? 'Show raw JSN-SR04T reflection distance in cm' : 'Tampilkan data mentah jarak pantul sensor ultrasonik JSN-SR04T (cm)'}
+                  >
+                    {language === 'en' ? 'Raw Ultrasonic (d)' : 'Raw Ultrasonik (d)'}
+                  </button>
+                </div>
+
+                {/* Range Toggle */}
+                <div className={`flex items-center gap-1 border ${isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
+                  <button
+                    id="btn-range-realtime"
+                    onClick={() => {
+                      setUseBatch360Mode(false);
+                      setChartRange('realtime');
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${(!useBatch360Mode && chartRange === 'realtime') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
+                    title={language === 'en' ? 'High resolution chart showing last 20 telemetry readings' : 'Grafik resolusi tinggi menampilkan 20 pembacaan telemetri terakhir'}
+                  >
+                    {language === 'en' ? 'Real-time (20 Pts)' : 'Terkini (20 Poin)'}
+                  </button>
+                  <button
+                    id="btn-range-24h"
+                    onClick={() => {
+                      setUseBatch360Mode(false);
+                      setChartRange('24h');
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${(!useBatch360Mode && chartRange === '24h') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
+                    title={language === 'en' ? 'Cumulative 24-hour water elevation trend' : 'Grafik histori elevasi air akumulatif dari 24 jam terakhir'}
+                  >
+                    {language === 'en' ? '24h Trend' : 'Tren 24 Jam'}
+                  </button>
+                  <button
+                    id="btn-range-batch360"
+                    onClick={() => setUseBatch360Mode(!useBatch360Mode)}
+                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${useBatch360Mode ? 'bg-emerald-500 text-black font-bold' : `${themeTextSub} hover:text-emerald-400`}`}
+                    title={language === 'en' ? 'Visualize 360 continuous sample array in 1 ESP32 batch' : 'Tampilkan visualisasi 360 array sampel kontinu dalam 1 siklus batch ESP32'}
+                  >
+                    {language === 'en' ? '360-Pt Batch' : 'Batch 360 Titik'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Export Data Button */}
+              <div className="relative">
+                <button
+                  id="btn-export-csv"
+                  onClick={handleExportCSV}
+                  disabled={isExportingCSV}
+                  title={language === 'en' ? 'Export last 24 hours sensor logs to CSV' : 'Ekspor Log Sensor 24 Jam Terakhir ke format CSV'}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 border text-[10px] font-mono rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    isDark
+                      ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm'
+                  } ${isExportingCSV ? 'opacity-50 cursor-wait' : ''}`}
+                >
+                  {isExportingCSV ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#3B82F6]" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5 text-[#3B82F6]" />
+                  )}
+                  <span className="font-bold">
+                    {isExportingCSV
+                      ? (language === 'en' ? 'QUERYING 24H...' : 'MENGAMBIL 24 JAM...')
+                      : (language === 'en' ? 'EXPORT CSV' : 'EXPORT CSV')}
+                  </span>
+                </button>
+
+                {exportNotice && (
+                  <div className="absolute right-0 top-full mt-2 w-72 p-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-lg text-[10px] font-sans shadow-xl z-50">
+                    <div className="flex items-start gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span>{exportNotice}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Unified Plot Area */}
+          <div className="w-full h-[310px]">
+            {!hasReceivedReadingsSnapshot ? (
+              <div className={`w-full h-full flex flex-col items-center justify-center ${themeTextMuted} font-mono text-[10px] uppercase tracking-widest`}>
+                <RefreshCw className="w-5 h-5 animate-spin text-[#3B82F6] mb-3" />
+                {language === 'en' ? 'Connecting to telemetry database...' : 'Menghubungkan ke basis data telemetri...'}
+              </div>
+            ) : chartData.length === 0 ? (
+              <div className={`w-full h-full flex flex-col items-center justify-center p-6 text-center rounded-xl border border-dashed ${isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                <div className="w-11 h-11 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-3">
+                  <Activity className="w-5 h-5" />
+                </div>
+                <span className="font-mono text-xs font-bold uppercase tracking-wider text-amber-400 mb-1.5">
+                  {language === 'en' ? 'Telemetry Standby — Awaiting ESP32' : 'Status Telemetri: Standby (Menunggu Transmisi ESP32)'}
+                </span>
+                <p className={`text-xs max-w-lg mb-4 font-sans leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {language === 'en'
+                    ? 'Database is active and ready. The unified curve and LSTM horizons will plot automatically once ESP32 transmits data.'
+                    : 'Database aktif dan siap menerima data. Kurva telemetri dan proyeksi LSTM akan tergambar otomatis saat ESP32 mengirim data.'}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleInjectQuickTest}
+                    disabled={isInjectingTestTelemetry}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-[#3B82F6] hover:bg-blue-400 text-black transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isInjectingTestTelemetry ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="w-3.5 h-3.5" />
+                    )}
+                    <span>{language === 'en' ? 'Test Chart (Sample 35 cm)' : 'Uji Grafik (Sampel 35 cm)'}</span>
+                  </button>
+                  {onNavigateTab && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('admin')}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium border transition-all cursor-pointer ${
+                        isDark
+                          ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                          : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+                      }`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-[#3B82F6]" />
+                      <span>{language === 'en' ? 'Open PLC Simulation Panel' : 'Buka Kontrol PLC & Simulasi'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={unifiedChartData} margin={{ top: 10, right: 18, left: -16, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorLevel" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.18} />
+                      <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colorPrediksi" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#A78BFA" stopOpacity={0.22} />
+                      <stop offset="95%" stopColor="#A78BFA" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colorRaw" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10B981" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke={themeGridColor} />
+                  <XAxis dataKey="time" stroke="#52525B" style={{ fontSize: 10, fontFamily: 'monospace' }} />
+                  <YAxis
+                    domain={
+                      chartViewMode === 'elevation'
+                        ? [0, elevationAxisMax]
+                        : [0, Math.max(300, (config?.reference_height || 300) + 20)]
+                    }
+                    stroke="#52525B"
+                    style={{ fontSize: 10, fontFamily: 'monospace' }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: isDark ? '#0D0D0F' : '#ffffff',
+                      borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0',
+                      borderRadius: '8px',
+                    }}
+                    labelStyle={{
+                      color: isDark ? '#94a3b8' : '#475569',
+                      fontWeight: 'bold',
+                      fontSize: 10,
+                      fontFamily: 'monospace',
+                    }}
+                    itemStyle={{ color: isDark ? '#fff' : '#0f172a', fontSize: 11 }}
+                  />
+                  {chartViewMode === 'elevation' ? (
+                    <>
+                      <Area
+                        type="monotone"
+                        dataKey="elevasi"
+                        name={language === 'en' ? 'Actual Elevation (cm)' : 'Elevasi Aktual (cm)'}
+                        stroke="#3B82F6"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#colorLevel)"
+                        connectNulls={false}
+                      />
+                      {activeForecast && (
+                        <Area
+                          type="monotone"
+                          dataKey="prediksi"
+                          name={language === 'en' ? 'LSTM Forecast (cm)' : 'Prediksi LSTM (cm)'}
+                          stroke="#A78BFA"
+                          strokeWidth={2}
+                          strokeDasharray="5 4"
+                          fillOpacity={1}
+                          fill="url(#colorPrediksi)"
+                          connectNulls={false}
+                        />
+                      )}
+                      {activeForecast && lastHistoricalTimeLabel && (
+                        <ReferenceLine
+                          x={lastHistoricalTimeLabel}
+                          stroke={isDark ? 'rgba(167,139,250,0.4)' : 'rgba(124,58,237,0.35)'}
+                          strokeDasharray="3 3"
+                          label={{
+                            value: language === 'en' ? 'NOW' : 'SAAT INI',
+                            fill: '#A78BFA',
+                            fontSize: 9,
+                            position: 'insideTopRight',
+                            fontFamily: 'monospace',
+                          }}
+                        />
+                      )}
+                      <ReferenceLine
+                        y={thresholdSiaga}
+                        stroke="#f59e0b"
+                        strokeDasharray="4 4"
+                        strokeWidth={1.2}
+                        label={{
+                          value: language === 'en' ? 'ALERT' : 'SIAGA',
+                          fill: '#f59e0b',
+                          fontSize: 8,
+                          position: 'right',
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                      <ReferenceLine
+                        y={thresholdBahaya}
+                        stroke="#f43f5e"
+                        strokeDasharray="4 4"
+                        strokeWidth={1.2}
+                        label={{
+                          value: language === 'en' ? 'DANGER' : 'BAHAYA',
+                          fill: '#f43f5e',
+                          fontSize: 8,
+                          position: 'right',
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Area
+                        type="monotone"
+                        dataKey="raw_distance"
+                        name={language === 'en' ? 'Raw Sensor Gap (cm)' : 'Raw Jarak Ultrasonik (cm)'}
+                        stroke="#10B981"
+                        strokeWidth={1.8}
+                        fillOpacity={1}
+                        fill="url(#colorRaw)"
+                      />
+                      <ReferenceLine
+                        y={config?.reference_height || 300}
+                        stroke="#71717A"
+                        strokeDasharray="3 3"
+                        strokeWidth={1}
+                        label={{
+                          value: 'TIANG/REF',
+                          fill: '#71717A',
+                          fontSize: 8,
+                          position: 'right',
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                    </>
+                  )}
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Trained LSTM 4-Horizon Breakdown (Cohesive Footer Strip Inside Unified Analytics Card) */}
+          <div id="processed-forecast-panel" className={`pt-5 border-t ${themeBorder} flex flex-col gap-4`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-col">
+                <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
+                  {language === 'en' ? 'Trained LSTM Multi-Horizon Projections' : 'Proyeksi Multi-Horizon LSTM (Model Terlatih)'}
+                </span>
+                <span className="font-mono text-[10px] text-[#3B82F6] mt-0.5 tabular-nums">
+                  {lstmForecast
+                    ? `${lstmForecast.modelMeta.sourceFile} · ${lstmForecast.modelMeta.architecture} · ${lstmForecast.modelMeta.totalParams.toLocaleString('id-ID')} params · MAE ${lstmForecast.modelMeta.maeCm} cm`
+                    : 'model_lstm_banjir.h5 · Menunggu data telemetri sensor...'}
+                </span>
+              </div>
+
+              {lstmForecast && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] tabular-nums">
+                  <span className={themeTextMuted}>
+                    Window {lstmForecast.inputCount}/24 · {lstmForecast.inferenceMs.toFixed(1)} ms
+                  </span>
+                  <span
+                    className={`font-bold uppercase tracking-wider ${
+                      lstmForecast.status === 'Bahaya'
+                        ? 'text-rose-400'
+                        : lstmForecast.status === 'Siaga'
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                    }`}
+                  >
+                    {language === 'en'
+                      ? `6h Outlook: ${lstmForecast.status}`
+                      : `Proyeksi 6J: ${lstmForecast.status === 'Normal' ? 'AMAN' : lstmForecast.status.toUpperCase()}`}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              {[
+                {
+                  label: 'Horizon T+30m',
+                  value: lstmForecast ? lstmForecast.prediction_30m : latestPrediction?.prediction_30m,
+                  conf: lstmForecast ? lstmForecast.confidence_30m : latestPrediction?.confidence_score,
+                  accentText: 'text-[#3B82F6]',
+                },
+                {
+                  label: language === 'en' ? 'Horizon T+1 Hour' : 'Horizon T+1 Jam',
+                  value: lstmForecast ? lstmForecast.prediction_1h : latestPrediction?.prediction_1h,
+                  conf: lstmForecast ? lstmForecast.confidence_1h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.95) : undefined),
+                  accentText: 'text-[#3B82F6]',
+                },
+                {
+                  label: language === 'en' ? 'Horizon T+3 Hours' : 'Horizon T+3 Jam',
+                  value: lstmForecast ? lstmForecast.prediction_3h : latestPrediction?.prediction_3h,
+                  conf: lstmForecast ? lstmForecast.confidence_3h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.88) : undefined),
+                  accentText: 'text-violet-400',
+                },
+                {
+                  label: language === 'en' ? 'Horizon T+6 Hours' : 'Horizon T+6 Jam',
+                  value: lstmForecast ? lstmForecast.prediction_6h : latestPrediction?.prediction_6h,
+                  conf: lstmForecast ? lstmForecast.confidence_6h : (latestPrediction ? Math.round(latestPrediction.confidence_score * 0.78) : undefined),
+                  accentText: 'text-amber-400',
+                },
+              ].map((card) => {
+                const delta =
+                  lstmForecast && typeof card.value === 'number'
+                    ? Math.round((card.value - lstmForecast.currentLevel) * 10) / 10
+                    : null;
+                const deltaColor =
+                  delta === null
+                    ? themeTextMuted
+                    : delta > 0.5
+                      ? 'text-amber-400'
+                      : delta < -0.5
+                        ? 'text-emerald-400'
+                        : themeTextMuted;
+
+                return (
+                  <div
+                    key={card.label}
+                    className={`rounded-xl border p-4 flex flex-col justify-between ${
+                      isDark ? 'bg-white/[0.02] border-white/[0.06]' : 'bg-slate-50/80 border-slate-200/80'
+                    }`}
+                  >
+                    <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[10px] uppercase tracking-wider`}>
+                      <span>{card.label}</span>
+                      <Clock className={`w-3.5 h-3.5 ${card.accentText}`} />
+                    </div>
+                    <div className="my-2.5 flex items-baseline justify-between gap-2">
+                      <span className={`text-3xl font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                        {typeof card.value === 'number' ? card.value.toFixed(1) : '--'}
+                        <span className="text-xs font-normal text-slate-400 ml-1">cm</span>
+                      </span>
+                      {delta !== null && (
+                        <span className={`font-mono text-[10px] tabular-nums ${deltaColor}`}>
+                          {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} cm
+                        </span>
+                      )}
+                    </div>
+                    <div className={`text-[10px] font-mono tabular-nums flex items-center justify-between pt-2 border-t ${themeBorder}`}>
+                      <span className={themeTextMuted}>{language === 'en' ? 'Confidence' : 'Keyakinan'}</span>
+                      <span className={`font-semibold ${card.accentText}`}>
+                        {typeof card.conf === 'number' ? `${card.conf}%` : '--%'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
 
     </div>
   );

@@ -4,6 +4,7 @@ import { Map2D } from './CiliwungHardwareLiveView';
 import CiliwungOfficial3DView from './CiliwungOfficial3DView';
 import graphScale from './ciliwung-graph-scale.json';
 import { unlockAlertAudio } from '../utils/alarmAudio';
+import { getApiBaseUrl } from '../utils/apiBase';
 
 type ScenarioId = 'ringan' | 'sedang' | 'lebat';
 type SpeedMultiplier = 1 | 10 | 25 | 50 | 150;
@@ -176,7 +177,7 @@ export default function CiliwungSimulationPage({
     };
   }, [onAlertStatusChange]);
 
-  const apiBase = typeof window !== 'undefined' ? window.location.origin : '';
+  const apiBase = getApiBaseUrl();
 
   const handleSelectNode = (nodeId: string) => {
     setGraphNodeId(nodeId);

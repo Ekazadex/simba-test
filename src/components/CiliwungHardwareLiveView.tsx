@@ -6,6 +6,7 @@ import { setWorkerUrl, type StyleSpecification } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { Curve } from 'recharts';
+import { getApiBaseUrl } from '../utils/apiBase';
 import { buildHardwareSnapshot, getDownstreamPresetLimits } from '../../backend/ciliwung/hardware-live.mjs';
 import {
   validLimits,
@@ -167,12 +168,16 @@ const graphClockTickFormatter = new Intl.DateTimeFormat('id-ID', {
   hour12: false,
 });
 
-function areaStyle(node: HardwareNode | undefined, condition: string | null) {
-  if (node?.status === 'BANJIR_JAKARTA') return { color: '#2563EB', radius: 950, opacity: 0.3 };
-  if (node?.status === 'SIAGA') return { color: '#F97316', radius: 650, opacity: 0.26 };
-  if (condition === 'lebat') return { color: '#2563EB', radius: 700, opacity: 0.2 };
-  if (condition === 'sedang') return { color: '#F97316', radius: 450, opacity: 0.18 };
-  return { color: '#FACC15', radius: 260, opacity: 0.14 };
+function areaStyle(node: HardwareNode | undefined, condition: string | null, config?: ThresholdConfig) {
+  if (node?.status === 'BANJIR_JAKARTA') return { color: '#2563EB', radius: 1100, opacity: 0.34 };
+  if (node?.status === 'SIAGA') return { color: '#F97316', radius: 800, opacity: 0.3 };
+  if (condition === 'lebat') return { color: '#2563EB', radius: 850, opacity: 0.28 };
+  if (condition === 'sedang') return { color: '#F97316', radius: 620, opacity: 0.25 };
+  const siagaLimit = Number(config?.threshold_siaga ?? 60);
+  if (node && typeof node.tmaCm === 'number' && siagaLimit > 0 && node.tmaCm >= siagaLimit * 0.55) {
+    return { color: '#FACC15', radius: 560, opacity: 0.26 };
+  }
+  return { color: '#22C55E', radius: 440, opacity: 0.24 };
 }
 
 export function Map2D({
@@ -336,11 +341,12 @@ export function Map2D({
         .addTo(nodeLayer);
     });
 
-    if (isLive && showHeat && river.length > 1) {
+    if (showHeat && river.length > 1) {
       const stations = mapPoints.slice(0, -1).filter((point) => {
         const node = nodeMap.get(point.id);
         return node && node.valueType !== 'reset';
       });
+      const fallbackStations = stations.length > 0 ? stations : mapPoints.slice(0, -1);
       const nearestRiverIndex = (point: { lat: number; lng: number }) =>
         river.reduce(
           (best, xy, i) => {
@@ -350,28 +356,30 @@ export function Map2D({
           { index: 0, dist: Infinity }
         ).index;
 
-      if (stations.length) {
-        const stationIndexes = stations.map((point) => ({ point, index: nearestRiverIndex(point) }));
+      if (fallbackStations.length) {
+        const stationIndexes = fallbackStations.map((point) => ({ point, index: nearestRiverIndex(point) }));
         const start = simulation ? 0 : Math.min(...stationIndexes.map((s) => s.index));
-        const canvas = L.canvas({ padding: 0.5 });
+        const opacityScale = isLive ? 1 : 0.8;
+
         for (let i = start; i < river.length - 1; i++) {
           const a = river[i];
           const b = river[i + 1];
           const nearest = stationIndexes.reduce((best, current) =>
             Math.abs(current.index - i) < Math.abs(best.index - i) ? current : best
           );
-          const node = nodeMap.get(nearest.point.id)!;
-          const style = areaStyle(node, condition);
+          const node = nodeMap.get(nearest.point.id);
+          const style = areaStyle(node, condition, config);
           const latScale = 111320;
           const lngScale = latScale * Math.cos(((a[1] + b[1]) * Math.PI) / 360);
           const dx = (b[0] - a[0]) * lngScale;
           const dy = (b[1] - a[1]) * latScale;
           const length = Math.hypot(dx, dy);
           if (!length) continue;
-          for (const [factor, opacity] of [
-            [1, 0.1],
-            [0.65, 0.15],
-            [0.32, 0.23],
+
+          for (const [factor, baseOpacity] of [
+            [1, 0.16],
+            [0.62, 0.24],
+            [0.3, 0.38],
           ]) {
             const ox = ((-dy / length) * style.radius * factor) / lngScale;
             const oy = ((dx / length) * style.radius * factor) / latScale;
@@ -383,14 +391,27 @@ export function Map2D({
                 [a[1] - oy, a[0] - ox],
               ],
               {
-                renderer: canvas,
                 stroke: false,
                 fillColor: style.color,
-                fillOpacity: opacity,
+                fillOpacity: baseOpacity * opacityScale,
                 interactive: false,
               }
             ).addTo(overlayLayer);
           }
+
+          // Crisp river centerline spine so the indicative corridor stays clearly visible at all zoom levels
+          L.polyline(
+            [
+              [a[1], a[0]],
+              [b[1], b[0]],
+            ],
+            {
+              color: style.color,
+              weight: 3,
+              opacity: 0.85 * opacityScale,
+              interactive: false,
+            }
+          ).addTo(overlayLayer);
         }
       }
     }
@@ -400,39 +421,52 @@ export function Map2D({
       hasFittedRef.current = true;
     }
     window.setTimeout(() => map.invalidateSize(), 0);
-  }, [snapshot, condition, isLive, mapReady, showHeat, extraNodes, river, simulation]);
+  }, [snapshot, condition, config, isLive, mapReady, showHeat, extraNodes, river, simulation]);
 
   return (
-    <div className={fillHeight ? 'flex flex-col flex-1 min-h-[480px]' : 'space-y-3'} data-testid="hardware-map2d">
+    <div
+      className={
+        fillHeight
+          ? `flex flex-col flex-1 ${compact ? 'min-h-[380px]' : 'min-h-[480px]'}`
+          : 'space-y-3'
+      }
+      data-testid="hardware-map2d"
+    >
       <div
         className={`relative ${
-          fillHeight ? 'h-[min(64vh,640px)] lg:h-auto lg:flex-1' : 'h-[min(64vh,640px)]'
-        } min-h-[440px] w-full overflow-hidden rounded-2xl border border-slate-500/30 bg-slate-900 shadow-xl`}
+          fillHeight
+            ? compact
+              ? 'h-[380px] lg:h-auto lg:flex-1 min-h-[360px]'
+              : 'h-[min(64vh,640px)] lg:h-auto lg:flex-1 min-h-[440px]'
+            : 'h-[min(64vh,640px)] min-h-[440px]'
+        } w-full overflow-hidden rounded-xl border border-slate-500/30 bg-slate-900`}
       >
         <div ref={containerRef} className="absolute inset-0 z-0" aria-label="Peta interaktif OpenStreetMap koridor Ciliwung" />
-        <div className="pointer-events-none absolute bottom-3 left-3 z-[1000] rounded-xl border border-slate-900/20 bg-slate-950/90 px-4 py-3 text-[11px] text-slate-200 shadow-lg backdrop-blur">
-          <div className="mb-2 font-bold uppercase tracking-wider text-slate-300">
-            Area indikatif · bukan batas banjir
+        {showHeat && (
+          <div className="pointer-events-none absolute bottom-3 left-3 z-[1000] rounded-xl border border-slate-900/20 bg-slate-950/90 px-4 py-3 text-[11px] text-slate-200 shadow-lg backdrop-blur">
+            <div className="mb-2 font-bold uppercase tracking-wider text-slate-300">
+              Area indikatif · bukan batas banjir
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+              <span>
+                <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                Normal
+              </span>
+              <span>
+                <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-yellow-400" />
+                Air naik
+              </span>
+              <span>
+                <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-orange-500" />
+                Siaga
+              </span>
+              <span>
+                <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-blue-600" />
+                Banjir
+              </span>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-            <span>
-              <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              Normal
-            </span>
-            <span>
-              <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-yellow-400" />
-              Air naik
-            </span>
-            <span>
-              <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-orange-500" />
-              Siaga
-            </span>
-            <span>
-              <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-blue-600" />
-              Banjir
-            </span>
-          </div>
-        </div>
+        )}
         {riverError && (
           <div role="status" className="absolute left-3 top-24 z-[1000] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white">
             Data sungai tidak tersedia; area indikatif disembunyikan.
@@ -1165,6 +1199,7 @@ export default function CiliwungHardwareLiveView({
   loadDayHistory,
   onEnterSimulation,
   compact = false,
+  embeddedInDashboard = false,
 }: {
   theme?: 'light' | 'dark';
   language?: 'id' | 'en';
@@ -1174,6 +1209,7 @@ export default function CiliwungHardwareLiveView({
   loadDayHistory?: () => Promise<DayHistoryResult>;
   onEnterSimulation?: () => void;
   compact?: boolean;
+  embeddedInDashboard?: boolean;
 }) {
   const isDark = theme === 'dark';
   const en = language === 'en';
@@ -1221,7 +1257,7 @@ export default function CiliwungHardwareLiveView({
   const fallbackLevel = typeof latestReading?.water_level === 'number' ? latestReading.water_level : null;
   const latestTimestamp = snapshot?.hardware?.measuredAt ?? latestReading?.timestamp;
   const isLive = snapshot?.hardware?.freshness === 'live' && snapshot.status === 'running';
-  const apiBase = typeof window !== 'undefined' ? window.location.origin : '';
+  const apiBase = getApiBaseUrl();
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 10_000);
@@ -1361,7 +1397,7 @@ export default function CiliwungHardwareLiveView({
 
   useEffect(() => {
     const input: HistoryPoint[] = JSON.parse(inputKey);
-    if (simulated || !input.length) {
+    if (embeddedInDashboard || simulated || !input.length) {
       setDemoForecast(null);
       setForecastStatus('insufficient');
       return;
@@ -1402,7 +1438,7 @@ export default function CiliwungHardwareLiveView({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [inputKey, apiBase, simulated]);
+  }, [inputKey, apiBase, simulated, embeddedInDashboard]);
 
   const rawProjection =
     selectedPoint && demoForecast?.key === inputKey
@@ -1432,6 +1468,127 @@ export default function CiliwungHardwareLiveView({
   const focus3DNode = (nodeId: string) => {
     setGraphNodeId(nodeId);
   };
+
+  const effectiveActiveView: HardwareView =
+    embeddedInDashboard && activeView === 'graph' ? 'map2d' : activeView;
+
+  if (embeddedInDashboard) {
+    return (
+      <section
+        data-testid="ciliwung-hardware-live-view"
+        className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} h-full w-full rounded-2xl border p-5 lg:p-6 flex flex-col`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <span className={`text-[10px] font-bold uppercase tracking-[0.22em] font-mono ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+              {en ? 'Ciliwung Corridor Digital Twin' : 'Koridor DAS Ciliwung · 2D & 3D'}
+            </span>
+            <p className={`mt-1 text-xs font-mono tabular-nums ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+              Pos Depok (N1) → Manggarai (N5) ·{' '}
+              {snapshot?.hardware?.valueType === 'simulation'
+                ? en
+                  ? 'Simulation'
+                  : 'Simulasi'
+                : 'ESP32 N1'}{' '}
+              ·{' '}
+              <span className={isLive ? 'text-emerald-400 font-semibold' : ''}>
+                {isLive ? 'LIVE' : 'STANDBY'}
+              </span>{' '}
+              · {formatReadingTime(latestTimestamp)}
+            </p>
+          </div>
+
+          <div
+            className={`inline-flex items-center gap-1 rounded-lg border p-0.5 text-[11px] font-mono shrink-0 ${
+              isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'
+            }`}
+            role="tablist"
+            aria-label={en ? 'Corridor map view' : 'Tampilan peta koridor'}
+          >
+            <button
+              type="button"
+              data-testid="hardware-view-map2d"
+              onClick={() => setActiveView('map2d')}
+              className={`rounded-md px-3 py-1.5 font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                effectiveActiveView === 'map2d'
+                  ? 'bg-[#3B82F6] text-black'
+                  : isDark
+                    ? 'text-zinc-400 hover:text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {en ? '2D Map' : 'Peta 2D'}
+            </button>
+            <button
+              type="button"
+              data-testid="hardware-view-3d"
+              onClick={() => setActiveView('map3d')}
+              className={`rounded-md px-3 py-1.5 font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                effectiveActiveView === 'map3d'
+                  ? 'bg-[#3B82F6] text-black'
+                  : isDark
+                    ? 'text-zinc-400 hover:text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {en ? '3D View' : 'Peta 3D'}
+            </button>
+          </div>
+        </div>
+
+        {streamError && (
+          <p role="status" className="mt-2.5 text-[11px] font-mono text-amber-400">
+            {streamError}
+          </p>
+        )}
+
+        <div className="mt-4 flex-1 flex flex-col">
+          {effectiveActiveView === 'map2d' && (
+            <Map2D snapshot={snapshot} fallbackLevel={fallbackLevel} config={config} compact fillHeight />
+          )}
+
+          {effectiveActiveView === 'map3d' && (
+            <div data-testid="hardware-map3d" className="flex flex-col flex-1 gap-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {GRAPH_NODES.map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    onClick={() => focus3DNode(node.id)}
+                    className={`rounded-lg border px-2.5 py-1 text-[11px] font-mono font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      graphNodeId === node.id
+                        ? 'border-blue-500 bg-blue-500/15 text-blue-400'
+                        : isDark
+                          ? 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-blue-400/50'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-400/50'
+                    }`}
+                  >
+                    {node.id} · {node.name}
+                  </button>
+                ))}
+              </div>
+              <div
+                className={`relative w-full flex-1 min-h-[340px] overflow-hidden rounded-xl border ${
+                  isDark ? 'border-white/10 bg-[#101916]' : 'border-slate-200 bg-[#b9d2d5]'
+                }`}
+              >
+                <CiliwungOfficial3DView
+                  mode="hardware"
+                  nodes={effective3DNodes}
+                  selectedNodeId={graphNodeId}
+                  onSelectNode={setGraphNodeId}
+                  isLive={isLive}
+                  isSimulatedHardware={simulated}
+                  theme={theme}
+                  language={language}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section

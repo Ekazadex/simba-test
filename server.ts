@@ -30,7 +30,49 @@ setLogLevel('error');
 
 const PORT = Number(process.env.PORT) || 3000;
 const app = express();
+
+// CORS middleware so split deployments (e.g. Vercel frontend -> Railway backend) work seamlessly for REST & SSE
+const configuredAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    const isAllowed =
+      configuredAllowedOrigins.length === 0 ||
+      configuredAllowedOrigins.includes('*') ||
+      configuredAllowedOrigins.includes(origin);
+    if (isAllowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, Last-Event-ID');
+  if (req.path.includes('/stream')) {
+    res.setHeader('X-Accel-Buffering', 'no');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use(express.json());
+
+app.get('/api/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    service: 'simba-backend',
+    runtime: process.env.RAILWAY_ENVIRONMENT ? 'railway' : (process.env.NODE_ENV || 'development'),
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // 1. Initialize Firebase inside Node using env vars or optional local applet config file
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
@@ -1462,7 +1504,11 @@ async function startServer() {
     );
   }
 
-  if (process.env.NODE_ENV !== 'production') {
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
@@ -1470,10 +1516,17 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res, next) => {
+        if (req.path.startsWith('/api/')) return next();
+        const indexPath = path.join(distPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          return res.sendFile(indexPath);
+        }
+        return res.status(404).json({ error: 'Not found' });
+      });
+    }
   }
 
   app.listen(PORT, '0.0.0.0', () => {

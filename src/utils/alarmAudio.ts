@@ -46,6 +46,8 @@ export function unlockAlertAudio(): void {
 export function stopAlertAudio(): void {
   activePlayToken += 1;
   activeAlertType = null;
+  pendingAutoplayType = null;
+  detachGestureUnlockListener();
 
   if (synthInterval) {
     clearInterval(synthInterval);
@@ -271,13 +273,45 @@ function setupAudioAnalyser(audio: HTMLAudioElement, type: AlertSoundType): void
   }
 }
 
+let pendingAutoplayType: AlertSoundType | null = null;
+let gestureListenerAttached = false;
+
+function handleUserGestureResume(): void {
+  unlockAlertAudio();
+  const pending = pendingAutoplayType;
+  if (!pending) return;
+  pendingAutoplayType = null;
+  // Retry starting the real MP3 loop now that a user gesture has unlocked playback
+  activeAlertType = null;
+  playAlertAudio(pending);
+}
+
+function attachGestureUnlockListener(): void {
+  if (gestureListenerAttached || typeof window === 'undefined') return;
+  gestureListenerAttached = true;
+  window.addEventListener('pointerdown', handleUserGestureResume, { passive: true });
+  window.addEventListener('keydown', handleUserGestureResume, { passive: true });
+}
+
+function detachGestureUnlockListener(): void {
+  if (!gestureListenerAttached || typeof window === 'undefined') return;
+  gestureListenerAttached = false;
+  window.removeEventListener('pointerdown', handleUserGestureResume);
+  window.removeEventListener('keydown', handleUserGestureResume);
+}
+
 export function playAlertAudio(type: AlertSoundType): void {
-  // Keep playing smoothly if the exact same alert level is already active
-  if (activeAlertType === type && (activeAudio || synthInterval)) {
+  // Keep playing smoothly without restart if the exact same alert level is already audibly active
+  if (
+    activeAlertType === type &&
+    !pendingAutoplayType &&
+    ((activeAudio && !activeAudio.paused) || synthInterval)
+  ) {
     return;
   }
 
   stopAlertAudio();
+  pendingAutoplayType = null;
   const token = activePlayToken;
   activeAlertType = type;
 
@@ -323,13 +357,15 @@ export function playAlertAudio(type: AlertSoundType): void {
           audio.pause();
           return;
         }
+        pendingAutoplayType = null;
+        detachGestureUnlockListener();
         setupAudioAnalyser(audio, type);
         if (synthInterval) {
           clearInterval(synthInterval);
           synthInterval = null;
         }
       })
-      .catch(() => {
+      .catch((err: any) => {
         if (token !== activePlayToken) return;
         if (loopInterval) {
           clearInterval(loopInterval);
@@ -337,6 +373,13 @@ export function playAlertAudio(type: AlertSoundType): void {
         }
         if (activeAudio === audio) {
           activeAudio = null;
+          // If blocked by browser autoplay policy (no click yet), wait for the first user gesture
+          // (e.g., clicking Kontrol PLC / Dashboard) to immediately launch the real MP3 alarm.
+          if (err?.name === 'NotAllowedError') {
+            pendingAutoplayType = type;
+            attachGestureUnlockListener();
+            return;
+          }
           tryPlayAudio(index + 1);
         }
       });
