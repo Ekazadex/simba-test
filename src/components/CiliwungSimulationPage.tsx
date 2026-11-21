@@ -852,7 +852,7 @@ export default function CiliwungSimulationPage({
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)] gap-5 items-stretch">
         <div className="min-w-0 flex flex-col gap-4">
-          <div className="flex flex-wrap gap-2" role="group" aria-label={en ? 'Simulation viewer' : 'Tampilan simulasi'}>
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap" role="group" aria-label={en ? 'Simulation viewer' : 'Tampilan simulasi'}>
             {(
               [
                 ['map3d', en ? '3D Watershed Map' : 'Simulasi Peta 3D'],
@@ -865,7 +865,7 @@ export default function CiliwungSimulationPage({
                 type="button"
                 aria-pressed={activeView === view}
                 onClick={() => setActiveView(view)}
-                className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${
+                className={`px-3 sm:px-4 py-2 rounded-xl text-[11px] sm:text-xs font-bold cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
                   activeView === view
                     ? 'bg-[#3B82F6] text-black'
                     : isDark
@@ -886,9 +886,9 @@ export default function CiliwungSimulationPage({
             <section
               className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-3 lg:p-5 flex flex-1 flex-col gap-3`}
             >
-              <div className={`flex items-center justify-between px-2 text-[10px] font-mono uppercase tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                <span>{en ? 'Ciliwung 3D Flood Explorer (UP1 Puncak → Java Sea)' : 'Visualisasi 3D DAS Ciliwung (UP1 Puncak → Laut Jawa)'}</span>
-                <span>{state?.runId ? `run ${state.runId.slice(0, 8)}` : 'idle'}</span>
+              <div className={`flex items-start sm:items-center justify-between gap-2 px-1 sm:px-2 text-[9.5px] sm:text-[10px] font-mono uppercase tracking-[0.12em] sm:tracking-widest leading-snug ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                <span className="min-w-0">{en ? 'Ciliwung 3D Flood Explorer (UP1 Puncak → Java Sea)' : 'Visualisasi 3D DAS Ciliwung (UP1 Puncak → Laut Jawa)'}</span>
+                <span className="shrink-0 whitespace-nowrap">{state?.runId ? `run ${state.runId.slice(0, 8)}` : 'idle'}</span>
               </div>
               <div
                 className={`relative flex-1 w-full overflow-hidden rounded-xl border ${

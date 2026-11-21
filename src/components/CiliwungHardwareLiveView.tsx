@@ -201,6 +201,8 @@ export function Map2D({
   const mapRef = useRef<L.Map | null>(null);
   const overlayLayerRef = useRef<L.LayerGroup | null>(null);
   const nodeLayerRef = useRef<L.LayerGroup | null>(null);
+  const riverRendererRef = useRef<L.SVG | null>(null);
+  const markerRendererRef = useRef<L.SVG | null>(null);
   const hasFittedRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
   const [tileState, setTileState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -271,6 +273,16 @@ export function Map2D({
           if (mapRef.current === map) setTileState('error');
         });
 
+      const riverPane = map.createPane('riverOverlayPane');
+      riverPane.style.zIndex = '410';
+      riverPane.style.pointerEvents = 'none';
+
+      const markerPane = map.createPane('stationMarkerPane');
+      markerPane.style.zIndex = '450';
+
+      riverRendererRef.current = L.svg({ pane: 'riverOverlayPane', padding: 0.5 });
+      markerRendererRef.current = L.svg({ pane: 'stationMarkerPane', padding: 0.5 });
+
       overlayLayerRef.current = L.layerGroup().addTo(map);
       nodeLayerRef.current = L.layerGroup().addTo(map);
       setMapReady(true);
@@ -291,6 +303,8 @@ export function Map2D({
       mapRef.current = null;
       overlayLayerRef.current = null;
       nodeLayerRef.current = null;
+      riverRendererRef.current = null;
+      markerRendererRef.current = null;
       setMapReady(false);
     };
   }, []);
@@ -307,11 +321,118 @@ export function Map2D({
     const mapPoints = [...extraNodes, ...REAL_MAP_NODES];
     const route = mapPoints.map((point) => [point.lat, point.lng] as L.LatLngExpression);
     const nodeMap = new Map((snapshot?.threeDNodes ?? []).map((node) => [node.id, node]));
+    const riverRenderer = riverRendererRef.current ?? undefined;
+    const markerRenderer = markerRendererRef.current ?? undefined;
 
+    // 1. Draw smooth continuous corridor polylines in the lower riverOverlayPane (zIndex 410)
+    if (showHeat && river.length > 1) {
+      const stations = mapPoints.slice(0, -1).filter((point) => {
+        const node = nodeMap.get(point.id);
+        return node && node.valueType !== 'reset';
+      });
+      const fallbackStations = stations.length > 0 ? stations : mapPoints.slice(0, -1);
+      const nearestRiverIndex = (point: { lat: number; lng: number }) =>
+        river.reduce(
+          (best, xy, i) => {
+            const dist = (xy[0] - point.lng) ** 2 + (xy[1] - point.lat) ** 2;
+            return dist < best.dist ? { index: i, dist } : best;
+          },
+          { index: 0, dist: Infinity }
+        ).index;
+
+      if (fallbackStations.length) {
+        const stationIndexes = fallbackStations.map((point) => ({ point, index: nearestRiverIndex(point) }));
+        const start = simulation ? 0 : Math.min(...stationIndexes.map((s) => s.index));
+        const opacityScale = isLive ? 1 : 0.85;
+
+        // Group consecutive river segments that share the same status color so strokes join seamlessly without corner blotches
+        type CorridorRun = {
+          color: string;
+          radius: number;
+          points: L.LatLngTuple[];
+        };
+        const runs: CorridorRun[] = [];
+
+        for (let i = start; i < river.length - 1; i++) {
+          const a = river[i];
+          const b = river[i + 1];
+          const nearest = stationIndexes.reduce((best, current) =>
+            Math.abs(current.index - i) < Math.abs(best.index - i) ? current : best
+          );
+          const node = nodeMap.get(nearest.point.id);
+          const style = areaStyle(node, condition, config);
+          const ptA: L.LatLngTuple = [a[1], a[0]];
+          const ptB: L.LatLngTuple = [b[1], b[0]];
+
+          const lastRun = runs[runs.length - 1];
+          if (lastRun && lastRun.color === style.color && lastRun.radius === style.radius) {
+            lastRun.points.push(ptB);
+          } else {
+            runs.push({
+              color: style.color,
+              radius: style.radius,
+              points: [ptA, ptB],
+            });
+          }
+        }
+
+        // Pass A: Slim soft indicative aura tightly hugging the river path
+        for (const run of runs) {
+          const haloWeight =
+            run.radius >= 950 ? 12 : run.radius >= 750 ? 10 : run.radius >= 550 ? 8 : 7;
+          L.polyline(run.points, {
+            pane: 'riverOverlayPane',
+            renderer: riverRenderer,
+            color: run.color,
+            weight: haloWeight,
+            opacity: 0.2 * opacityScale,
+            lineCap: 'round',
+            lineJoin: 'round',
+            smoothFactor: 0.4,
+            interactive: false,
+          }).addTo(overlayLayer);
+        }
+
+        // Pass B: Delicate warm edge for bright yellow so it stays crisp against the light map
+        for (const run of runs) {
+          if (run.color !== '#FACC15') continue;
+          L.polyline(run.points, {
+            pane: 'riverOverlayPane',
+            renderer: riverRenderer,
+            color: '#CA8A04',
+            weight: 3.6,
+            opacity: 0.4 * opacityScale,
+            lineCap: 'round',
+            lineJoin: 'round',
+            smoothFactor: 0.4,
+            interactive: false,
+          }).addTo(overlayLayer);
+        }
+
+        // Pass C: Clean, slim continuous centerline following the river geometry
+        for (const run of runs) {
+          L.polyline(run.points, {
+            pane: 'riverOverlayPane',
+            renderer: riverRenderer,
+            color: run.color,
+            weight: 2.6,
+            opacity: 0.95 * opacityScale,
+            lineCap: 'round',
+            lineJoin: 'round',
+            smoothFactor: 0.4,
+            interactive: false,
+          }).addTo(overlayLayer);
+        }
+      }
+    }
+
+    // 2. Draw station markers in the upper stationMarkerPane (zIndex 450) using original clean dark-outline style
     mapPoints.slice(0, -1).forEach((point) => {
       const node = nodeMap.get(point.id);
       const markerColor = node ? statusColor(node.status) : '#64748B';
       L.circleMarker([point.lat, point.lng], {
+        pane: 'stationMarkerPane',
+        renderer: markerRenderer,
         radius: point.id === 'N1' ? 8 : 6,
         color: '#0F172A',
         weight: 2,
@@ -341,81 +462,6 @@ export function Map2D({
         .addTo(nodeLayer);
     });
 
-    if (showHeat && river.length > 1) {
-      const stations = mapPoints.slice(0, -1).filter((point) => {
-        const node = nodeMap.get(point.id);
-        return node && node.valueType !== 'reset';
-      });
-      const fallbackStations = stations.length > 0 ? stations : mapPoints.slice(0, -1);
-      const nearestRiverIndex = (point: { lat: number; lng: number }) =>
-        river.reduce(
-          (best, xy, i) => {
-            const dist = (xy[0] - point.lng) ** 2 + (xy[1] - point.lat) ** 2;
-            return dist < best.dist ? { index: i, dist } : best;
-          },
-          { index: 0, dist: Infinity }
-        ).index;
-
-      if (fallbackStations.length) {
-        const stationIndexes = fallbackStations.map((point) => ({ point, index: nearestRiverIndex(point) }));
-        const start = simulation ? 0 : Math.min(...stationIndexes.map((s) => s.index));
-        const opacityScale = isLive ? 1 : 0.8;
-
-        for (let i = start; i < river.length - 1; i++) {
-          const a = river[i];
-          const b = river[i + 1];
-          const nearest = stationIndexes.reduce((best, current) =>
-            Math.abs(current.index - i) < Math.abs(best.index - i) ? current : best
-          );
-          const node = nodeMap.get(nearest.point.id);
-          const style = areaStyle(node, condition, config);
-          const latScale = 111320;
-          const lngScale = latScale * Math.cos(((a[1] + b[1]) * Math.PI) / 360);
-          const dx = (b[0] - a[0]) * lngScale;
-          const dy = (b[1] - a[1]) * latScale;
-          const length = Math.hypot(dx, dy);
-          if (!length) continue;
-
-          for (const [factor, baseOpacity] of [
-            [1, 0.16],
-            [0.62, 0.24],
-            [0.3, 0.38],
-          ]) {
-            const ox = ((-dy / length) * style.radius * factor) / lngScale;
-            const oy = ((dx / length) * style.radius * factor) / latScale;
-            L.polygon(
-              [
-                [a[1] + oy, a[0] + ox],
-                [b[1] + oy, b[0] + ox],
-                [b[1] - oy, b[0] - ox],
-                [a[1] - oy, a[0] - ox],
-              ],
-              {
-                stroke: false,
-                fillColor: style.color,
-                fillOpacity: baseOpacity * opacityScale,
-                interactive: false,
-              }
-            ).addTo(overlayLayer);
-          }
-
-          // Crisp river centerline spine so the indicative corridor stays clearly visible at all zoom levels
-          L.polyline(
-            [
-              [a[1], a[0]],
-              [b[1], b[0]],
-            ],
-            {
-              color: style.color,
-              weight: 3,
-              opacity: 0.85 * opacityScale,
-              interactive: false,
-            }
-          ).addTo(overlayLayer);
-        }
-      }
-    }
-
     if (!hasFittedRef.current) {
       map.fitBounds(L.latLngBounds(route), { padding: [38, 38] });
       hasFittedRef.current = true;
@@ -443,11 +489,11 @@ export function Map2D({
       >
         <div ref={containerRef} className="absolute inset-0 z-0" aria-label="Peta interaktif OpenStreetMap koridor Ciliwung" />
         {showHeat && (
-          <div className="pointer-events-none absolute bottom-3 left-3 z-[1000] rounded-xl border border-slate-900/20 bg-slate-950/90 px-4 py-3 text-[11px] text-slate-200 shadow-lg backdrop-blur">
-            <div className="mb-2 font-bold uppercase tracking-wider text-slate-300">
+          <div className="pointer-events-none absolute bottom-7 left-3 sm:bottom-3 z-[1000] rounded-xl border border-white/10 bg-slate-950/90 px-3 py-2 sm:px-3.5 sm:py-2.5 text-[10px] sm:text-[11px] text-slate-200 shadow-lg backdrop-blur">
+            <div className="mb-1.5 font-bold uppercase tracking-wider text-slate-300 text-[9px] sm:text-[10px]">
               Area indikatif · bukan batas banjir
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            <div className="grid grid-cols-2 gap-x-3.5 gap-y-1">
               <span>
                 <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
                 Normal
@@ -1476,14 +1522,14 @@ export default function CiliwungHardwareLiveView({
     return (
       <section
         data-testid="ciliwung-hardware-live-view"
-        className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} h-full w-full rounded-2xl border p-5 lg:p-6 flex flex-col`}
+        className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} h-full w-full min-w-0 overflow-hidden rounded-2xl border p-4 sm:p-5 lg:p-6 flex flex-col`}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="min-w-0">
-            <span className={`text-[10px] font-bold uppercase tracking-[0.22em] font-mono ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+            <span className={`text-[10px] font-bold uppercase tracking-[0.2em] sm:tracking-[0.22em] font-mono ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
               {en ? 'Ciliwung Corridor Digital Twin' : 'Koridor DAS Ciliwung · 2D & 3D'}
             </span>
-            <p className={`mt-1 text-xs font-mono tabular-nums ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+            <p className={`mt-1 text-[11px] sm:text-xs font-mono tabular-nums leading-snug ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
               Pos Depok (N1) → Manggarai (N5) ·{' '}
               {snapshot?.hardware?.valueType === 'simulation'
                 ? en
@@ -1499,7 +1545,7 @@ export default function CiliwungHardwareLiveView({
           </div>
 
           <div
-            className={`inline-flex items-center gap-1 rounded-lg border p-0.5 text-[11px] font-mono shrink-0 ${
+            className={`grid grid-cols-2 sm:inline-flex items-center gap-1 w-full sm:w-auto rounded-lg border p-0.5 text-[11px] font-mono shrink-0 ${
               isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'
             }`}
             role="tablist"
@@ -1509,7 +1555,7 @@ export default function CiliwungHardwareLiveView({
               type="button"
               data-testid="hardware-view-map2d"
               onClick={() => setActiveView('map2d')}
-              className={`rounded-md px-3 py-1.5 font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              className={`rounded-md px-3 py-1.5 font-semibold text-center transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 effectiveActiveView === 'map2d'
                   ? 'bg-[#3B82F6] text-black'
                   : isDark
@@ -1523,7 +1569,7 @@ export default function CiliwungHardwareLiveView({
               type="button"
               data-testid="hardware-view-3d"
               onClick={() => setActiveView('map3d')}
-              className={`rounded-md px-3 py-1.5 font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              className={`rounded-md px-3 py-1.5 font-semibold text-center transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 effectiveActiveView === 'map3d'
                   ? 'bg-[#3B82F6] text-black'
                   : isDark
@@ -1542,20 +1588,20 @@ export default function CiliwungHardwareLiveView({
           </p>
         )}
 
-        <div className="mt-4 flex-1 flex flex-col">
+        <div className="mt-3.5 sm:mt-4 flex-1 flex flex-col min-w-0">
           {effectiveActiveView === 'map2d' && (
             <Map2D snapshot={snapshot} fallbackLevel={fallbackLevel} config={config} compact fillHeight />
           )}
 
           {effectiveActiveView === 'map3d' && (
-            <div data-testid="hardware-map3d" className="flex flex-col flex-1 gap-3">
-              <div className="flex flex-wrap items-center gap-1.5">
+            <div data-testid="hardware-map3d" className="flex flex-col flex-1 gap-2.5 sm:gap-3 min-w-0">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap sm:overflow-visible">
                 {GRAPH_NODES.map((node) => (
                   <button
                     key={node.id}
                     type="button"
                     onClick={() => focus3DNode(node.id)}
-                    className={`rounded-lg border px-2.5 py-1 text-[11px] font-mono font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    className={`rounded-lg border px-2.5 py-1.5 sm:py-1 text-[10.5px] sm:text-[11px] font-mono font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                       graphNodeId === node.id
                         ? 'border-blue-500 bg-blue-500/15 text-blue-400'
                         : isDark

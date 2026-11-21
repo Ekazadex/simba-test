@@ -372,23 +372,23 @@ export default function CiliwungOfficial3DView({
     >
       <canvas ref={canvasRef} className="block h-full w-full cursor-grab active:cursor-grabbing" />
 
-      {/* Top status banner (Naufal style) */}
+      {/* Top status banner */}
       {phase === 'ready' && (
-        <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-3">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-slate-950/75 px-3.5 py-1.5 text-[10px] font-mono font-semibold uppercase tracking-[0.14em] text-slate-100 shadow-lg backdrop-blur-md">
-            <span className={`h-2 w-2 rounded-full ${bannerDotColor}`} />
-            <span className="truncate">{bannerText}</span>
+        <div className="pointer-events-none absolute inset-x-0 top-2.5 sm:top-3 z-10 flex justify-center px-2.5 sm:px-3">
+          <div className="inline-flex max-w-full items-center justify-center gap-1.5 sm:gap-2 rounded-xl sm:rounded-full border border-white/15 bg-slate-950/80 px-2.5 py-1.5 sm:px-3.5 sm:py-1.5 text-[9px] sm:text-[10px] font-mono font-semibold uppercase tracking-[0.06em] sm:tracking-[0.14em] text-slate-100 shadow-lg backdrop-blur-md text-center leading-snug">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${bannerDotColor}`} />
+            <span className="min-w-0 break-words">{bannerText}</span>
           </div>
         </div>
       )}
 
       {/* Bottom-left action bar */}
       {phase === 'ready' && (
-        <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
+        <div className="absolute bottom-2.5 left-2.5 right-2.5 sm:bottom-3 sm:left-3 sm:right-auto z-10 flex flex-wrap items-center gap-1.5 sm:gap-2">
           <button
             type="button"
             onClick={() => setShowDetails((v) => !v)}
-            className="rounded-lg border border-white/15 bg-slate-950/80 px-3 py-1.5 text-[11px] font-semibold text-white shadow-md backdrop-blur-md transition hover:bg-slate-900 cursor-pointer"
+            className="rounded-lg border border-white/15 bg-slate-950/80 px-2.5 py-1.5 sm:px-3 text-[10px] sm:text-[11px] font-semibold text-white shadow-md backdrop-blur-md transition hover:bg-slate-900 cursor-pointer whitespace-nowrap"
           >
             {showDetails
               ? en
@@ -401,14 +401,14 @@ export default function CiliwungOfficial3DView({
           <button
             type="button"
             onClick={() => activeMeta && flyToStation(activeMeta.id)}
-            className="rounded-lg border border-white/15 bg-slate-950/80 px-3 py-1.5 text-[11px] font-semibold text-white shadow-md backdrop-blur-md transition hover:bg-slate-900 cursor-pointer"
+            className="rounded-lg border border-white/15 bg-slate-950/80 px-2.5 py-1.5 sm:px-3 text-[10px] sm:text-[11px] font-semibold text-white shadow-md backdrop-blur-md transition hover:bg-slate-900 cursor-pointer whitespace-nowrap"
           >
             {en ? `Focus ${activeMeta?.id ?? 'N1'}` : `Fokus ${activeMeta?.id ?? 'N1'}`}
           </button>
           <button
             type="button"
             onClick={flyToSea}
-            className="rounded-lg border border-sky-400/30 bg-slate-950/80 px-3 py-1.5 text-[11px] font-semibold text-sky-200 shadow-md backdrop-blur-md transition hover:bg-slate-900 cursor-pointer"
+            className="rounded-lg border border-sky-400/30 bg-slate-950/80 px-2.5 py-1.5 sm:px-3 text-[10px] sm:text-[11px] font-semibold text-sky-200 shadow-md backdrop-blur-md transition hover:bg-slate-900 cursor-pointer whitespace-nowrap"
           >
             {en ? 'Java Sea Outlet' : 'Muara Laut Jawa'}
           </button>

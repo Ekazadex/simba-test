@@ -43,7 +43,9 @@ import {
   Moon,
   Globe,
   Volume2,
-  VolumeX
+  VolumeX,
+  Menu,
+  X
 } from 'lucide-react';
 import { apiUrl } from './utils/apiBase';
 
@@ -51,7 +53,9 @@ const NODE_ID = 'node-kukusan-01';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'simulation' | 'admin'>('dashboard');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const handleSelectTab = useCallback((nextTab: 'dashboard' | 'simulation' | 'admin') => {
+    setMobileMenuOpen(false);
     setActiveTab((prev) => {
       if (prev !== nextTab && (prev === 'simulation' || nextTab === 'simulation')) {
         fetch(apiUrl('/api/ciliwung-mode'), {
@@ -579,221 +583,398 @@ export default function App() {
       )}
       
       {/* GLOBAL SCADA CONSOLE TOP NAV BAR */}
-      <nav id="top-nav" className={`border-b ${isDark ? 'border-white/5' : 'border-slate-200'} ${themeNav} backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3.5 flex flex-col sm:flex-row justify-between items-center gap-4 rounded-t-xl`}>
-        
-        {/* BRAND & STATUS HEADER */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center gap-3">
-            <Activity className="w-4 h-4 text-[#3B82F6]" />
-            <span className={`text-[11px] uppercase tracking-[0.3em] font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              SIMBA RTU COMM v2.1
+      <nav id="top-nav" className={`border-b ${isDark ? 'border-white/5' : 'border-slate-200'} ${themeNav} backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3 rounded-t-xl`}>
+        <div className="flex items-center justify-between gap-3">
+          {/* BRAND & STATUS HEADER */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Activity className="w-4 h-4 text-[#3B82F6] shrink-0" />
+              <span className={`text-[11px] uppercase tracking-[0.24em] sm:tracking-[0.3em] font-bold truncate ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                SIMBA RTU COMM v2.1
+              </span>
+            </div>
+
+            <span className={`hidden sm:inline-flex text-[9px] font-mono px-2 py-0.5 rounded border items-center gap-1.5 shrink-0 ${
+              isDark
+                ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                : 'text-emerald-700 bg-emerald-50 border-emerald-100'
+            }`}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+              {language === 'en' ? 'FIRESTORE CONNECTED' : 'FIRESTORE TERHUBUNG'}
             </span>
           </div>
 
-          <span className={`text-[9px] font-mono px-2 py-0.5 rounded border flex items-center gap-1.5 ${
-            isDark 
-              ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' 
-              : 'text-emerald-700 bg-emerald-50 border-emerald-100'
-          }`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
-            {language === 'en' ? 'FIRESTORE CONNECTED' : 'FIRESTORE TERHUBUNG'}
-          </span>
-        </div>
+          {/* DESKTOP CONTROLS & AUTH (lg+) */}
+          <div className="hidden lg:flex items-center gap-2.5 shrink-0">
+            {/* LANGUAGE SWITCHER BUTTON (ID / EN) */}
+            <button
+              id="btn-language-toggle"
+              onClick={toggleLanguage}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                isDark
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                  : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+              }`}
+              title={language === 'id' ? 'Switch to English (Ganti ke Bahasa Inggris)' : 'Ganti ke Bahasa Indonesia (Switch to Indonesian)'}
+            >
+              <Globe className="w-3.5 h-3.5 text-[#3B82F6]" />
+              <span className={language === 'id' ? 'text-[#3B82F6] font-extrabold' : 'text-slate-500'}>ID</span>
+              <span className="text-slate-500/40">/</span>
+              <span className={language === 'en' ? 'text-[#3B82F6] font-extrabold' : 'text-slate-500'}>EN</span>
+            </button>
 
-        {/* CONTROLS & AUTH */}
-        <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-end">
-          
-          {/* LANGUAGE SWITCHER BUTTON (ID / EN) */}
-          <button
-            id="btn-language-toggle"
-            onClick={toggleLanguage}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-mono font-bold transition-all cursor-pointer ${
-              isDark 
-                ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' 
-                : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
-            }`}
-            title={language === 'id' ? 'Switch to English (Ganti ke Bahasa Inggris)' : 'Ganti ke Bahasa Indonesia (Switch to Indonesian)'}
-          >
-            <Globe className="w-3.5 h-3.5 text-[#3B82F6]" />
-            <span className={language === 'id' ? 'text-[#3B82F6] font-extrabold' : 'text-slate-500'}>ID</span>
-            <span className="text-slate-500/40">/</span>
-            <span className={language === 'en' ? 'text-[#3B82F6] font-extrabold' : 'text-slate-500'}>EN</span>
-          </button>
+            {/* AUDIO ALARM GLOBAL TOGGLE BUTTON */}
+            <button
+              id="nav-toggle-sound"
+              onClick={handleToggleSound}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-mono font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                soundEnabled
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-500 hover:bg-amber-500/20'
+                  : isDark
+                    ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300'
+                    : 'bg-slate-100 border-slate-200 text-slate-500 hover:text-slate-700'
+              }`}
+              title={soundEnabled ? (language === 'en' ? 'Mute Audio Alarm' : 'Matikan Suara Alarm') : (language === 'en' ? 'Unmute Audio Alarm' : 'Aktifkan Suara Alarm')}
+            >
+              {soundEnabled ? (
+                <>
+                  <Volume2 className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+                  <span className="text-[10px]">{language === 'en' ? 'ALARM: ON' : 'ALARM: AKTIF'}</span>
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-3.5 h-3.5 text-slate-500" />
+                  <span className="text-[10px]">{language === 'en' ? 'ALARM: OFF' : 'ALARM: MATI'}</span>
+                </>
+              )}
+            </button>
 
-          {/* AUDIO ALARM GLOBAL TOGGLE BUTTON */}
-          <button
-            id="nav-toggle-sound"
-            onClick={handleToggleSound}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-mono font-semibold transition-all cursor-pointer ${
-              soundEnabled 
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-500 hover:bg-amber-500/20' 
-                : isDark 
-                  ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300' 
-                  : 'bg-slate-100 border-slate-200 text-slate-500 hover:text-slate-700'
-            }`}
-            title={soundEnabled ? (language === 'en' ? 'Mute Audio Alarm' : 'Matikan Suara Alarm') : (language === 'en' ? 'Unmute Audio Alarm' : 'Aktifkan Suara Alarm')}
-          >
-            {soundEnabled ? (
-              <>
-                <Volume2 className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-                <span className="text-[10px] hidden sm:inline">{language === 'en' ? 'ALARM: ON' : 'ALARM: AKTIF'}</span>
-              </>
+            {/* THEME TOGGLER BUTTON */}
+            <button
+              id="theme-toggle"
+              onClick={toggleTheme}
+              className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center justify-center shrink-0 ${
+                isDark
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 text-amber-400'
+                  : 'bg-white hover:bg-slate-100 border-slate-200 text-amber-500 shadow-sm'
+              }`}
+              title={isDark ? (language === 'en' ? 'Switch to Light Mode' : 'Ganti ke Mode Terang') : (language === 'en' ? 'Switch to Dark Mode' : 'Ganti ke Mode Gelap')}
+            >
+              {isDark ? <Sun className="w-4 h-4 animate-spin-slow" /> : <Moon className="w-4 h-4" />}
+            </button>
+
+            {/* TAB CHANGER */}
+            <div className={`flex p-1 border rounded-xl shrink-0 ${
+              isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'
+            }`}>
+              <button
+                id="tab-dashboard"
+                onClick={() => handleSelectTab('dashboard')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'dashboard'
+                    ? 'bg-[#3B82F6] text-black font-bold shadow-md'
+                    : isDark
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                Dashboard
+              </button>
+
+              <button
+                id="tab-simulation"
+                onClick={() => handleSelectTab('simulation')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'simulation'
+                    ? 'bg-[#3B82F6] text-black font-bold shadow-md'
+                    : isDark
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Compass className="w-3.5 h-3.5" />
+                {language === 'en' ? '3D Simulation' : 'Simulasi 3D'}
+              </button>
+
+              <button
+                id="tab-admin"
+                onClick={() => handleSelectTab('admin')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeTab === 'admin'
+                    ? 'bg-[#3B82F6] text-black font-bold shadow-md'
+                    : isDark
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                {language === 'en' ? 'PLC Control' : 'Kontrol PLC'}
+              </button>
+            </div>
+
+            {/* USER PROFILE & LOG OUT / LOG IN */}
+            {user ? (
+              <div className={`flex items-center gap-3 pl-3 border-l ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                <div className="flex flex-col text-right">
+                  <span className={`text-xs font-bold leading-none mb-0.5 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                    {user.displayName || 'Administrator'}
+                  </span>
+                  <span className="text-[9px] font-mono text-slate-500">
+                    {user.email}
+                  </span>
+                </div>
+                {user.photoURL ? (
+                  <img
+                    src={user.photoURL}
+                    alt="Avatar"
+                    referrerPolicy="no-referrer"
+                    className="w-8 h-8 rounded-full border border-white/10"
+                  />
+                ) : (
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center border text-slate-400 ${
+                    isDark ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'
+                  }`}>
+                    <User className="w-4 h-4" />
+                  </div>
+                )}
+                <button
+                  id="btn-logout"
+                  onClick={handleLogout}
+                  className={`p-2 rounded-lg border transition-all cursor-pointer ${
+                    isDark
+                      ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-400 hover:text-rose-400'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-500 hover:text-rose-600 shadow-sm'
+                  }`}
+                  title="Keluar Konsol"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
             ) : (
-              <>
-                <VolumeX className="w-3.5 h-3.5 text-slate-500" />
-                <span className="text-[10px] hidden sm:inline">{language === 'en' ? 'ALARM: OFF' : 'ALARM: MATI'}</span>
-              </>
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-login-admin"
+                  onClick={() => {
+                    setLoginError(null);
+                    setIsLoginModalOpen(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-1.5 bg-[#3B82F6] hover:bg-blue-600 text-black text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md whitespace-nowrap shrink-0"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Login Admin PLC
+                </button>
+              </div>
             )}
-          </button>
-
-          {/* THEME TOGGLER BUTTON */}
-          <button
-            id="theme-toggle"
-            onClick={toggleTheme}
-            className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
-              isDark 
-                ? 'bg-white/5 hover:bg-white/10 border-white/10 text-amber-400' 
-                : 'bg-white hover:bg-slate-100 border-slate-200 text-amber-500 shadow-sm'
-            }`}
-            title={isDark ? (language === 'en' ? 'Switch to Light Mode' : 'Ganti ke Mode Terang') : (language === 'en' ? 'Switch to Dark Mode' : 'Ganti ke Mode Gelap')}
-          >
-            {isDark ? <Sun className="w-4 h-4 animate-spin-slow" /> : <Moon className="w-4 h-4" />}
-          </button>
-
-          {/* TAB CHANGER */}
-          <div className={`flex p-1 border rounded-xl ${
-            isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'
-          }`}>
-            <button
-              id="tab-dashboard"
-              onClick={() => handleSelectTab('dashboard')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-                activeTab === 'dashboard'
-                  ? 'bg-[#3B82F6] text-black font-bold shadow-md'
-                  : isDark 
-                    ? 'text-slate-400 hover:text-slate-200' 
-                    : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5" />
-              {language === 'en' ? 'Dashboard' : 'Dashboard'}
-            </button>
-
-            <button
-              id="tab-simulation"
-              onClick={() => handleSelectTab('simulation')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-                activeTab === 'simulation'
-                  ? 'bg-[#3B82F6] text-black font-bold shadow-md'
-                  : isDark 
-                    ? 'text-slate-400 hover:text-slate-200' 
-                    : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Compass className="w-3.5 h-3.5" />
-              {language === 'en' ? '3D Simulation' : 'Simulasi 3D'}
-            </button>
-
-            <button
-              id="tab-admin"
-              onClick={() => handleSelectTab('admin')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-                activeTab === 'admin'
-                  ? 'bg-[#3B82F6] text-black font-bold shadow-md'
-                  : isDark 
-                    ? 'text-slate-400 hover:text-slate-200' 
-                    : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              {language === 'en' ? 'PLC Control' : 'Kontrol PLC'}
-            </button>
           </div>
 
-          {/* USER PROFILE & LOG OUT / LOG IN */}
-          {user ? (
-            <div className={`flex items-center gap-3 pl-3 border-l ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-              <div className="flex flex-col text-right">
-                <span className={`text-xs font-bold leading-none mb-0.5 ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                  {user.displayName || 'Administrator'}
-                </span>
-                <span className="text-[9px] font-mono text-slate-500">
-                  {user.email}
-                </span>
-              </div>
-              {user.photoURL ? (
-                <img 
-                  src={user.photoURL} 
-                  alt="Avatar" 
-                  referrerPolicy="no-referrer"
-                  className="w-8 h-8 rounded-full border border-white/10"
-                />
-              ) : (
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center border text-slate-400 ${
-                  isDark ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'
-                }`}>
-                  <User className="w-4 h-4" />
-                </div>
-              )}
-              <button
-                id="btn-logout"
-                onClick={handleLogout}
-                className={`p-2 rounded-lg border transition-all cursor-pointer ${
-                  isDark 
-                    ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-400 hover:text-rose-400' 
-                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-500 hover:text-rose-600 shadow-sm'
-                }`}
-                title="Keluar Konsol"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <button
-                id="btn-login-admin"
-                onClick={() => {
-                  setLoginError(null);
-                  setIsLoginModalOpen(true);
-                }}
-                className="flex items-center gap-2 px-4 py-1.5 bg-[#3B82F6] hover:bg-blue-600 text-black text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                Login Admin PLC
-              </button>
-            </div>
-          )}
+          {/* MOBILE RIGHT HAMBURGER BUTTON (< lg) */}
+          <div className="flex lg:hidden items-center gap-2 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block sm:hidden" title={language === 'en' ? 'Firestore Connected' : 'Firestore Terhubung'} />
+            <button
+              id="btn-mobile-menu"
+              type="button"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              aria-expanded={mobileMenuOpen}
+              aria-label={mobileMenuOpen ? (language === 'en' ? 'Close menu' : 'Tutup menu') : (language === 'en' ? 'Open menu' : 'Buka menu')}
+              className={`p-2 rounded-xl border transition-colors cursor-pointer flex items-center justify-center ${
+                isDark
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-200'
+                  : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+              }`}
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
+
+        {/* MOBILE EXPANDABLE MENU PANEL (< lg) */}
+        {mobileMenuOpen && (
+          <div
+            id="mobile-nav-menu"
+            className={`lg:hidden mt-3 pt-3 border-t flex flex-col gap-3 ${
+              isDark ? 'border-white/10' : 'border-slate-200'
+            }`}
+          >
+            {/* Primary Navigation Links */}
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleSelectTab('dashboard')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === 'dashboard'
+                    ? 'bg-[#3B82F6] text-black font-bold'
+                    : isDark
+                      ? 'bg-white/[0.03] text-slate-300 hover:bg-white/10'
+                      : 'bg-slate-100/80 text-slate-700 hover:bg-slate-200/70'
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <LayoutDashboard className="w-4 h-4" />
+                  Dashboard
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectTab('simulation')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === 'simulation'
+                    ? 'bg-[#3B82F6] text-black font-bold'
+                    : isDark
+                      ? 'bg-white/[0.03] text-slate-300 hover:bg-white/10'
+                      : 'bg-slate-100/80 text-slate-700 hover:bg-slate-200/70'
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <Compass className="w-4 h-4" />
+                  {language === 'en' ? '3D Simulation' : 'Simulasi 3D'}
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectTab('admin')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === 'admin'
+                    ? 'bg-[#3B82F6] text-black font-bold'
+                    : isDark
+                      ? 'bg-white/[0.03] text-slate-300 hover:bg-white/10'
+                      : 'bg-slate-100/80 text-slate-700 hover:bg-slate-200/70'
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  {language === 'en' ? 'PLC Control' : 'Kontrol PLC'}
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+              </button>
+            </div>
+
+            {/* Quick Controls Row: Language, Alarm, Theme */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={toggleLanguage}
+                className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl border text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                  isDark
+                    ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                    : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5 text-[#3B82F6]" />
+                <span className={language === 'id' ? 'text-[#3B82F6]' : 'text-slate-500'}>ID</span>
+                <span className="text-slate-500/40">/</span>
+                <span className={language === 'en' ? 'text-[#3B82F6]' : 'text-slate-500'}>EN</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleSound}
+                className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl border text-[10px] font-mono font-semibold transition-all cursor-pointer ${
+                  soundEnabled
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-500'
+                    : isDark
+                      ? 'bg-white/5 border-white/10 text-slate-400'
+                      : 'bg-slate-100 border-slate-200 text-slate-500'
+                }`}
+              >
+                {soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-amber-500" /> : <VolumeX className="w-3.5 h-3.5" />}
+                <span>{soundEnabled ? (language === 'en' ? 'ON' : 'AKTIF') : (language === 'en' ? 'OFF' : 'MATI')}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl border text-[10px] font-mono font-semibold transition-all cursor-pointer ${
+                  isDark
+                    ? 'bg-white/5 hover:bg-white/10 border-white/10 text-amber-400'
+                    : 'bg-white hover:bg-slate-100 border-slate-200 text-amber-600'
+                }`}
+              >
+                {isDark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+                <span>{isDark ? (language === 'en' ? 'Light' : 'Terang') : (language === 'en' ? 'Dark' : 'Gelap')}</span>
+              </button>
+            </div>
+
+            {/* Auth / Profile Footer */}
+            <div className={`pt-2.5 border-t flex items-center justify-between gap-2 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
+              <span className={`text-[10px] font-mono flex items-center gap-1.5 ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                {language === 'en' ? 'Firestore Connected' : 'Firestore Terhubung'}
+              </span>
+
+              {user ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    handleLogout();
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                    isDark
+                      ? 'bg-white/5 border-white/10 text-rose-400 hover:bg-rose-500/10'
+                      : 'bg-white border-slate-200 text-rose-600 hover:bg-rose-50'
+                  }`}
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>{language === 'en' ? 'Logout' : 'Keluar'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setLoginError(null);
+                    setIsLoginModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#3B82F6] hover:bg-blue-500 text-black text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Login Admin PLC
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </nav>
 
       {/* SYSTEM WARNING BANNER IF IN BAHAYA OR OFFLINE */}
       {isAppDeviceOffline ? (
-        <div id="alert-banner" className={`${
-          isDark 
-            ? 'bg-slate-900/80 border-b border-white/10 text-slate-400' 
-            : 'bg-slate-100 border-b border-slate-300 text-slate-600'
-        } text-[11px] px-4 py-2 flex items-center justify-center gap-2 text-center font-mono uppercase tracking-wider`}>
-          <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />
-          <span className={`font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>
-            {language === 'en' ? '[ STATUS: OFFLINE ] :' : '[ STATUS OFFLINE ] :'}
+        <div
+          id="alert-banner"
+          className={`${
+            isDark
+              ? 'bg-slate-900/80 border-b border-white/10 text-slate-400'
+              : 'bg-slate-100 border-b border-slate-300 text-slate-600'
+          } text-[10px] sm:text-[11px] px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center font-mono uppercase tracking-wide sm:tracking-wider leading-snug`}
+        >
+          <span className={`inline-flex items-center gap-1.5 font-bold whitespace-nowrap shrink-0 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+            <span className="w-2 h-2 rounded-full bg-slate-400 inline-block shrink-0" />
+            {language === 'en' ? 'STATUS: OFFLINE' : 'STATUS: OFFLINE'}
           </span>
-          <span>
+          <span className="max-w-3xl">
             {language === 'en'
               ? 'RTU ESP32 device has not sent new data for over 8 minutes. Telemetry automatically paused.'
               : 'Perangkat RTU ESP32 tidak mengirim data baru lebih dari 8 menit. Telemetri otomatis dibekukan.'}
           </span>
         </div>
       ) : config && config.status_alat === 'Online' && (
-        <div id="alert-banner" className={`${
-          isDark 
-            ? 'bg-rose-950/20 border-b border-white/5 text-rose-300' 
-            : 'bg-rose-50 border-b border-rose-100 text-rose-700'
-        } text-[11px] px-4 py-2 flex items-center justify-center gap-2 text-center font-mono uppercase tracking-wider`}>
-          <span className="w-2 h-2 rounded-full bg-rose-500 scada-led-blink inline-block" />
-          <span className={`font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>
-            {language === 'en' ? '[ ACTIVE MONITORING ] :' : '[ NOTIFIKASI AKTIF ] :'}
+        <div
+          id="alert-banner"
+          className={`${
+            isDark
+              ? 'bg-rose-950/20 border-b border-white/5 text-rose-300'
+              : 'bg-rose-50 border-b border-rose-100 text-rose-700'
+          } text-[10px] sm:text-[11px] px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center font-mono uppercase tracking-wide sm:tracking-wider leading-snug`}
+        >
+          <span className={`inline-flex items-center gap-1.5 font-bold whitespace-nowrap shrink-0 ${isDark ? 'text-white' : 'text-slate-800'}`}>
+            <span className="w-2 h-2 rounded-full bg-rose-500 scada-led-blink inline-block shrink-0" />
+            {language === 'en' ? 'ACTIVE MONITORING' : 'NOTIFIKASI AKTIF'}
           </span>
-          <span>
+          <span className="max-w-3xl">
             {language === 'en'
               ? 'Real-Time Telemetry & SIMBA Local Hydrology Predictive Model Active (BPBD & UI Calibrated).'
               : 'Sinyal Telemetri Real-Time & Model Prediktif Hidrologi Lokal SIMBA Aktif (Kalibrasi Parameter BPBD & UI).'}
@@ -827,7 +1008,7 @@ export default function App() {
       )}
 
       {/* CORE WORKSPACE CONTENT AREA */}
-      <main id="main-content" className="flex-grow p-4 lg:p-8 max-w-7xl mx-auto w-full">
+      <main id="main-content" className="flex-grow px-3 py-4 sm:px-4 lg:p-8 max-w-7xl mx-auto w-full min-w-0">
         {activeTab === 'dashboard' ? (
           <SCADADashboard 
             config={config} 

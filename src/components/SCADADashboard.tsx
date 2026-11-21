@@ -923,7 +923,7 @@ export default function SCADADashboard({
       {/* ROW 1: COMPACT TELEMETRY STATUS STRIP + SINGLE SIMULATION CTA */}
       <div
         id="scada-hardware-pause-banner"
-        className={`col-span-12 px-5 py-3.5 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+        className={`col-span-12 min-w-0 overflow-hidden px-4 py-3.5 sm:px-5 rounded-2xl border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 ${
           isHardwareLive
             ? isDark
               ? 'bg-emerald-950/20 border-emerald-500/25 text-emerald-300'
@@ -933,8 +933,8 @@ export default function SCADADashboard({
               : 'bg-white border-slate-200 text-slate-700 shadow-sm'
         }`}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="relative flex h-2.5 w-2.5 shrink-0">
+        <div className="flex items-start sm:items-center gap-3 w-full min-w-0 flex-1">
+          <span className="relative flex h-2.5 w-2.5 shrink-0 mt-1 sm:mt-0">
             {isHardwareLive && (
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             )}
@@ -948,8 +948,8 @@ export default function SCADADashboard({
               }`}
             />
           </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono font-semibold tracking-wide uppercase">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] sm:text-xs font-mono font-semibold tracking-wide uppercase leading-snug">
               {config?.auto_simulation &&
               (latestReading?.source?.includes('Simulator') || latestReading?.source?.includes('Scenario')) ? (
                 <>
@@ -973,7 +973,7 @@ export default function SCADADashboard({
                 </span>
               )}
             </div>
-            <p className={`text-[11px] mt-0.5 font-sans truncate ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+            <p className={`text-[11px] mt-1 sm:mt-0.5 font-sans leading-relaxed break-words lg:truncate ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
               {timeAgoText} ·{' '}
               {language === 'en'
                 ? 'Paused on latest telemetry until new transmission arrives.'
@@ -982,9 +982,9 @@ export default function SCADADashboard({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-end shrink-0">
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap shrink-0 ${alertBg}`}>
-            <span className={`w-2 h-2 rounded-full ${alertLed} inline-block`} />
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full lg:w-auto lg:justify-end shrink-0">
+          <div className={`flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-[10.5px] sm:text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap shrink-0 ${alertBg}`}>
+            <span className={`w-2 h-2 rounded-full ${alertLed} inline-block shrink-0`} />
             <span className="font-mono">{alertLabel}</span>
           </div>
 
@@ -992,7 +992,7 @@ export default function SCADADashboard({
             <button
               type="button"
               onClick={() => onNavigateTab('simulation')}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#3B82F6] hover:bg-blue-400 px-3.5 py-1.5 text-xs font-bold text-black transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#3B82F6] hover:bg-blue-400 px-3.5 py-2 sm:py-1.5 text-xs font-bold text-black transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <span>{language === 'en' ? '9-Node Simulation' : 'Masuk Simulasi 9-Node'}</span>
               <ChevronRight className="w-3.5 h-3.5" />
@@ -1002,10 +1002,10 @@ export default function SCADADashboard({
       </div>
 
       {/* ROW 2: SPATIAL HERO — 2D/3D CILIWUNG CORRIDOR MAP (8 COLS) + LIVE WATER ELEVATION GAUGE (4 COLS) */}
-      <div id="measurement-grid" className="col-span-12 grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+      <div id="measurement-grid" className="col-span-12 min-w-0 grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-stretch">
 
         {/* Left 8 Cols: Interactive 2D/3D Corridor Map (Spatial Hero Above the Fold) */}
-        <div className="col-span-12 lg:col-span-8 flex flex-col">
+        <div className="col-span-12 lg:col-span-8 min-w-0 flex flex-col">
           <CiliwungHardwareLiveView
             embeddedInDashboard
             theme={theme}
@@ -1018,7 +1018,7 @@ export default function SCADADashboard({
         </div>
 
         {/* Right 4 Cols: Core Water Level Gauge & Physical Ultrasonic Cross-Section */}
-        <div id="water-gauge" className={`col-span-12 lg:col-span-4 h-full ${themeCard} rounded-2xl p-5 lg:p-6 relative overflow-hidden flex flex-col justify-between`}>
+        <div id="water-gauge" className={`col-span-12 lg:col-span-4 min-w-0 h-full ${themeCard} rounded-2xl p-4 sm:p-5 lg:p-6 relative overflow-hidden flex flex-col justify-between`}>
           <div className="flex justify-between items-center gap-2 mb-3">
             <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
               {language === 'en' ? 'Water Surface Elevation' : 'Tinggi Elevasi Air'}
@@ -1094,8 +1094,8 @@ export default function SCADADashboard({
           <div className={`w-full flex-1 min-h-[250px] ${isDark ? 'bg-black/50 border-white/5' : 'bg-slate-100/60 border-slate-200'} rounded-xl border p-4 relative overflow-hidden flex flex-col justify-between mt-4 shadow-inner`}>
 
             {/* 1. Bridge/Beam concrete ceiling & Sensor Probe */}
-            <div className="absolute top-0 left-0 right-0 h-7 bg-zinc-700 border-b border-zinc-600 flex items-center justify-center z-10 shadow-sm">
-              <span className="text-[7px] font-mono text-zinc-300 tracking-widest uppercase">TIANG PIPA & LENGAN BOOM DRAINASE KUKUSAN</span>
+            <div className="absolute top-0 left-0 right-0 h-7 bg-zinc-700 border-b border-zinc-600 flex items-center justify-center px-2 z-10 shadow-sm">
+              <span className="text-[7px] font-mono text-zinc-300 tracking-widest uppercase truncate">TIANG PIPA & LENGAN BOOM DRAINASE KUKUSAN</span>
 
               {/* JSN-SR04T Sensor Probe Visual */}
               <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 w-10 h-5 bg-zinc-800 rounded-b-md border-x border-b border-zinc-600 flex justify-around items-center px-1">
@@ -1211,7 +1211,7 @@ export default function SCADADashboard({
       </div>
 
       {/* ROW 3: OFFICIAL BMKG PUBLIC API WEATHER FORECAST */}
-      <div id="bmkg-gauge" className={`col-span-12 ${themeCard} rounded-2xl p-5 lg:p-6 relative overflow-hidden`}>
+      <div id="bmkg-gauge" className={`col-span-12 min-w-0 ${themeCard} rounded-2xl p-4 sm:p-5 lg:p-6 relative overflow-hidden`}>
         <div className={`flex flex-wrap justify-between items-center gap-3 pb-4 mb-5 border-b ${themeBorder}`}>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex flex-col">
@@ -1380,7 +1380,7 @@ export default function SCADADashboard({
               </div>
 
               {Array.isArray(liveWeather.forecast_slots) && liveWeather.forecast_slots.length > 0 ? (
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {liveWeather.forecast_slots.map((slot, idx) => (
                     <div
                       key={`${slot.date_label}-${slot.time_wib}-${idx}`}
@@ -1451,8 +1451,8 @@ export default function SCADADashboard({
       </div>
 
       {/* ROW 4: UNIFIED SCADA TELEMETRY CURVE + TRAINED LSTM FORECAST (SINGLE SOURCE OF TRUTH) */}
-      <div id="scada-charts-forecasts" className="col-span-12">
-        <div id="scada-plot-container" className={`${themeCard} rounded-2xl p-5 lg:p-6 flex flex-col gap-6`}>
+      <div id="scada-charts-forecasts" className="col-span-12 min-w-0">
+        <div id="scada-plot-container" className={`${themeCard} rounded-2xl p-4 sm:p-5 lg:p-6 flex flex-col gap-5 sm:gap-6 overflow-hidden`}>
 
           {/* Chart Header & Controls */}
           <div className="flex flex-col gap-3">
@@ -1494,26 +1494,26 @@ export default function SCADADashboard({
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
                 {/* Mode Toggle: Elevasi vs Raw Ultrasonik */}
-                <div className={`flex items-center gap-1 border ${isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
+                <div className={`grid grid-cols-2 sm:inline-flex items-center gap-1 w-full sm:w-auto border ${isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
                   <button
                     id="btn-mode-elevation"
                     onClick={() => setChartViewMode('elevation')}
-                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-md transition-all cursor-pointer text-center whitespace-nowrap shrink-0 ${
                       chartViewMode === 'elevation'
                         ? 'bg-[#3B82F6] text-black font-bold'
                         : `${themeTextSub} hover:text-[#3B82F6]`
                     }`}
                     title={language === 'en' ? 'Show Water Surface Elevation (TMA) + LSTM forecast' : 'Tampilkan Elevasi Muka Air (TMA) + kurva prediksi LSTM'}
                   >
-                    {language === 'en' ? 'Elevation (TMA) + LSTM' : 'Elevasi Air (TMA) + LSTM'}
+                    {language === 'en' ? 'Elevation + LSTM' : 'Elevasi + LSTM'}
                   </button>
                   <button
                     id="btn-mode-raw"
                     onClick={() => setChartViewMode('raw_ultrasonic')}
-                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-md transition-all cursor-pointer text-center whitespace-nowrap shrink-0 ${
                       chartViewMode === 'raw_ultrasonic'
                         ? 'bg-emerald-500 text-black font-bold'
                         : `${themeTextSub} hover:text-emerald-400`
@@ -1525,17 +1525,17 @@ export default function SCADADashboard({
                 </div>
 
                 {/* Range Toggle */}
-                <div className={`flex items-center gap-1 border ${isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
+                <div className={`grid grid-cols-3 sm:inline-flex items-center gap-1 w-full sm:w-auto border ${isDark ? 'border-white/10 bg-black/30' : 'border-slate-200 bg-slate-100'} rounded-lg p-0.5 text-[10px] font-mono`}>
                   <button
                     id="btn-range-realtime"
                     onClick={() => {
                       setUseBatch360Mode(false);
                       setChartRange('realtime');
                     }}
-                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${(!useBatch360Mode && chartRange === 'realtime') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
+                    className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-md transition-all cursor-pointer text-center whitespace-nowrap shrink-0 ${(!useBatch360Mode && chartRange === 'realtime') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
                     title={language === 'en' ? 'High resolution chart showing last 20 telemetry readings' : 'Grafik resolusi tinggi menampilkan 20 pembacaan telemetri terakhir'}
                   >
-                    {language === 'en' ? 'Real-time (20 Pts)' : 'Terkini (20 Poin)'}
+                    {language === 'en' ? '20 Pts' : '20 Poin'}
                   </button>
                   <button
                     id="btn-range-24h"
@@ -1543,30 +1543,30 @@ export default function SCADADashboard({
                       setUseBatch360Mode(false);
                       setChartRange('24h');
                     }}
-                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${(!useBatch360Mode && chartRange === '24h') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
+                    className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-md transition-all cursor-pointer text-center whitespace-nowrap shrink-0 ${(!useBatch360Mode && chartRange === '24h') ? 'bg-[#3B82F6] text-black font-bold' : `${themeTextSub} hover:text-[#3B82F6]`}`}
                     title={language === 'en' ? 'Cumulative 24-hour water elevation trend' : 'Grafik histori elevasi air akumulatif dari 24 jam terakhir'}
                   >
-                    {language === 'en' ? '24h Trend' : 'Tren 24 Jam'}
+                    {language === 'en' ? '24h Trend' : 'Tren 24J'}
                   </button>
                   <button
                     id="btn-range-batch360"
                     onClick={() => setUseBatch360Mode(!useBatch360Mode)}
-                    className={`px-2.5 py-1 rounded-md transition-all cursor-pointer whitespace-nowrap shrink-0 ${useBatch360Mode ? 'bg-emerald-500 text-black font-bold' : `${themeTextSub} hover:text-emerald-400`}`}
+                    className={`px-2 sm:px-2.5 py-1.5 sm:py-1 rounded-md transition-all cursor-pointer text-center whitespace-nowrap shrink-0 ${useBatch360Mode ? 'bg-emerald-500 text-black font-bold' : `${themeTextSub} hover:text-emerald-400`}`}
                     title={language === 'en' ? 'Visualize 360 continuous sample array in 1 ESP32 batch' : 'Tampilkan visualisasi 360 array sampel kontinu dalam 1 siklus batch ESP32'}
                   >
-                    {language === 'en' ? '360-Pt Batch' : 'Batch 360 Titik'}
+                    {language === 'en' ? 'Batch 360' : 'Batch 360'}
                   </button>
                 </div>
               </div>
 
               {/* Export Data Button */}
-              <div className="relative">
+              <div className="relative w-full sm:w-auto">
                 <button
                   id="btn-export-csv"
                   onClick={handleExportCSV}
                   disabled={isExportingCSV}
                   title={language === 'en' ? 'Export last 24 hours sensor logs to CSV' : 'Ekspor Log Sensor 24 Jam Terakhir ke format CSV'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 border text-[10px] font-mono rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  className={`w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 border text-[10px] font-mono rounded-lg transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                     isDark
                       ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
                       : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm'

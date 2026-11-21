@@ -11,6 +11,14 @@ import fileConfig from '../firebase-applet-config.json';
 // Set logging level to prevent internal stream reconnect notices
 setLogLevel('error');
 
+function isRealEnvValue(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^(MY_|YOUR_|REPLACE_|CHANGE_ME)/i.test(trimmed)) return false;
+  return true;
+}
+
 const envConfig: Record<string, any> = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
@@ -23,7 +31,7 @@ const envConfig: Record<string, any> = {
 
 const firebaseConfig: Record<string, any> = {
   ...(fileConfig as Record<string, any>),
-  ...Object.fromEntries(Object.entries(envConfig).filter(([, value]) => Boolean(value))),
+  ...Object.fromEntries(Object.entries(envConfig).filter(([, value]) => isRealEnvValue(value))),
 };
 
 const app = initializeApp(firebaseConfig);

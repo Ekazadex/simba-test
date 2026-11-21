@@ -81,14 +81,25 @@ if (fs.existsSync(configPath)) {
   fileFirebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 }
 
+function pickRealEnv(...candidates: Array<string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    if (/^(MY_|YOUR_|REPLACE_|CHANGE_ME)/i.test(trimmed)) continue;
+    return trimmed;
+  }
+  return undefined;
+}
+
 const firebaseConfig: Record<string, any> = {
-  projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || fileFirebaseConfig.projectId,
-  appId: process.env.FIREBASE_APP_ID || process.env.VITE_FIREBASE_APP_ID || fileFirebaseConfig.appId,
-  apiKey: process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || fileFirebaseConfig.apiKey,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || process.env.VITE_FIREBASE_AUTH_DOMAIN || fileFirebaseConfig.authDomain,
-  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID || fileFirebaseConfig.firestoreDatabaseId,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || fileFirebaseConfig.storageBucket,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || fileFirebaseConfig.messagingSenderId,
+  projectId: pickRealEnv(process.env.FIREBASE_PROJECT_ID, process.env.VITE_FIREBASE_PROJECT_ID, fileFirebaseConfig.projectId),
+  appId: pickRealEnv(process.env.FIREBASE_APP_ID, process.env.VITE_FIREBASE_APP_ID, fileFirebaseConfig.appId),
+  apiKey: pickRealEnv(process.env.FIREBASE_API_KEY, process.env.VITE_FIREBASE_API_KEY, fileFirebaseConfig.apiKey),
+  authDomain: pickRealEnv(process.env.FIREBASE_AUTH_DOMAIN, process.env.VITE_FIREBASE_AUTH_DOMAIN, fileFirebaseConfig.authDomain),
+  firestoreDatabaseId: pickRealEnv(process.env.FIREBASE_DATABASE_ID, process.env.VITE_FIREBASE_DATABASE_ID, fileFirebaseConfig.firestoreDatabaseId),
+  storageBucket: pickRealEnv(process.env.FIREBASE_STORAGE_BUCKET, process.env.VITE_FIREBASE_STORAGE_BUCKET, fileFirebaseConfig.storageBucket),
+  messagingSenderId: pickRealEnv(process.env.FIREBASE_MESSAGING_SENDER_ID, process.env.VITE_FIREBASE_MESSAGING_SENDER_ID, fileFirebaseConfig.messagingSenderId),
 };
 
 if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
@@ -1498,6 +1509,25 @@ async function startServer() {
             res.setHeader('Cache-Control', 'no-cache, must-revalidate');
           } else {
             res.setHeader('Cache-Control', 'public, max-age=86400');
+          }
+        },
+      })
+    );
+  }
+
+  const publicReportsPath = path.join(process.cwd(), 'public', 'reports');
+  const distReportsPath = path.join(process.cwd(), 'dist', 'reports');
+  const reportsPath = process.env.NODE_ENV === 'production' && fs.existsSync(distReportsPath) ? distReportsPath : publicReportsPath;
+
+  if (fs.existsSync(reportsPath)) {
+    app.use(
+      '/reports',
+      express.static(reportsPath, {
+        etag: true,
+        setHeaders: (res, filePath) => {
+          if (path.extname(filePath).toLowerCase() === '.pdf') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Cache-Control', 'no-cache');
           }
         },
       })
