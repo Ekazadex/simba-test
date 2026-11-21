@@ -566,17 +566,44 @@ function parseBmkgLocalDatetime(localDt: string, isEn: boolean): { hourWib: stri
   };
 }
 
-// Get live local weather directly from official BMKG Public API (no fabricated values or synthetic prose)
+function getBmkgIconForWmoCode(code: number, hourWib: number): string {
+  const period = hourWib >= 6 && hourWib < 18 ? 'am' : 'pm';
+  let slug = 'berawan';
+  if (code === 0) slug = 'cerah';
+  else if (code === 1 || code === 2) slug = 'cerah berawan';
+  else if (code === 3) slug = 'berawan';
+  else if (code === 45 || code === 48) slug = 'kabut';
+  else if (code === 51 || code === 53 || code === 55 || code === 61 || code === 80) slug = 'hujan ringan';
+  else if (code === 63 || code === 81) slug = 'hujan sedang';
+  else if (code === 65 || code === 82) slug = 'hujan lebat';
+  else if (code >= 95) slug = 'hujan petir';
+  return `https://api-apps.bmkg.go.id/storage/icon/cuaca/${encodeURIComponent(slug)}-${period}.svg`;
+}
+
+function getCleanConditionIdFromWmo(code: number): string {
+  if (code === 0) return 'Cerah';
+  if (code === 1 || code === 2) return 'Cerah Berawan';
+  if (code === 3) return 'Berawan';
+  if (code === 45 || code === 48) return 'Kabut';
+  if (code === 51 || code === 53 || code === 55 || code === 61 || code === 80) return 'Hujan Ringan';
+  if (code === 63 || code === 81) return 'Hujan Sedang';
+  if (code === 65 || code === 82) return 'Hujan Lebat';
+  if (code >= 95) return 'Hujan Petir';
+  return getWeatherCondition(code);
+}
+
+// Get live local weather directly from official BMKG Public API (with complete Open-Meteo fallback if BMKG returns empty data)
 app.get('/api/live-weather', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const isEn = (req.query.lang as string) === 'en' || (req.query.language as string) === 'en';
   const fetchedAtWib = formatWibTime(new Date());
 
-  // Official BMKG ADM4 endpoints for Beji, Kota Depok (Pondok Cina primary, Kukusan & Beji fallback)
+  // Official BMKG ADM4 endpoints for Beji, Kota Depok (Pondok Cina primary, Kukusan & Beji Timur fallback)
   const bmkgUrls = [
-    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1005', // Pondok Cina
-    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1006', // Kukusan
-    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1002'  // Beji
+    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1005', // Pondok Cina (publik)
+    'https://api-apps.bmkg.go.id/api/df/v1/forecast/adm?adm4=32.76.06.1005', // Pondok Cina (apps)
+    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1002', // Kukusan
+    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1006', // Beji Timur
   ];
 
   // Step 1: Fetch verbatim data directly from BMKG public API
@@ -677,25 +704,84 @@ app.get('/api/live-weather', async (req, res) => {
     }
   }
 
-  // Step 2: Honest Open-Meteo fallback ONLY when all BMKG endpoints are unreachable
+  // Step 2: Complete real Open-Meteo fallback when BMKG public API returns empty cuaca[] or is unreachable
   try {
-    console.warn('[API] BMKG endpoints unreachable, falling back to Open-Meteo.');
+    console.warn('[API] BMKG endpoints returned empty cuaca[], falling back to Open-Meteo hourly + current.');
     const weatherRes = await fetch(
-      'https://api.open-meteo.com/v1/forecast?latitude=-6.3655&longitude=106.8321&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&wind_speed_unit=kmh&timezone=Asia/Jakarta'
+      'https://api.open-meteo.com/v1/forecast?latitude=-6.3655&longitude=106.8321&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&hourly=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=2&wind_speed_unit=kmh&timezone=Asia/Jakarta'
     );
     if (weatherRes.ok) {
       const weatherData = await weatherRes.json();
       const cur = weatherData?.current;
       if (cur && typeof cur.temperature_2m === 'number') {
-        const rawCondId = getWeatherCondition(cur.weather_code);
+        const curParsed = parseBmkgLocalDatetime(cur.time || '', isEn);
+        const curHourMatch = /T(\d{2}):/.exec(cur.time || '');
+        const curHourWib = curHourMatch ? Number(curHourMatch[1]) : new Date().getUTCHours() + 7;
+        const rawCondId = getCleanConditionIdFromWmo(Number(cur.weather_code));
         const rawWindId = typeof cur.wind_direction_10m === 'number' ? getWindDirection(cur.wind_direction_10m) : '—';
         const visKm = typeof cur.visibility === 'number' && cur.visibility > 0
           ? `${(cur.visibility / 1000).toFixed(1)} km`
           : '—';
 
+        // Build 4 real upcoming 3-hourly slots (+3h, +6h, +9h, +12h WIB) from Open-Meteo hourly array
+        const upcomingSlots: Array<{
+          time_wib: string;
+          date_label: string;
+          temperature_c: number;
+          humidity_percent: number | null;
+          precipitation_mm: number;
+          condition: string;
+          wind_speed_kph: number | null;
+          wind_direction: string;
+          weather_icon: string;
+        }> = [];
+
+        const hTimes: string[] = Array.isArray(weatherData?.hourly?.time) ? weatherData.hourly.time : [];
+        if (hTimes.length > 0) {
+          const nowMs = Date.now();
+          let startIdx = hTimes.findIndex((t) => Date.parse(`${t}:00+07:00`) > nowMs);
+          if (startIdx < 0) startIdx = 0;
+
+          // Step every 3 hours to mirror BMKG's 3-hourly forecast cadence
+          for (let k = 0; k < 4; k++) {
+            const idx = startIdx + k * 3;
+            if (idx >= hTimes.length) break;
+            const tStr = hTimes[idx];
+            const parsed = parseBmkgLocalDatetime(tStr, isEn);
+            const hrMatch = /T(\d{2}):/.exec(tStr);
+            const hrWib = hrMatch ? Number(hrMatch[1]) : 12;
+            const wCode = Number(weatherData.hourly.weather_code?.[idx] ?? 3);
+            const condId = getCleanConditionIdFromWmo(wCode);
+            const windDeg = weatherData.hourly.wind_direction_10m?.[idx];
+            const slotWindId = typeof windDeg === 'number' ? getWindDirection(windDeg) : '—';
+
+            upcomingSlots.push({
+              time_wib: parsed.hourWib.replace(' WIB', ''),
+              date_label: parsed.dateLabel,
+              temperature_c: Math.round(Number(weatherData.hourly.temperature_2m?.[idx] ?? cur.temperature_2m)),
+              humidity_percent:
+                typeof weatherData.hourly.relative_humidity_2m?.[idx] === 'number'
+                  ? Math.round(weatherData.hourly.relative_humidity_2m[idx])
+                  : null,
+              precipitation_mm:
+                typeof weatherData.hourly.precipitation?.[idx] === 'number'
+                  ? Math.round(weatherData.hourly.precipitation[idx] * 10) / 10
+                  : 0,
+              condition: isEn ? translateConditionToEn(condId) : condId,
+              wind_speed_kph:
+                typeof weatherData.hourly.wind_speed_10m?.[idx] === 'number'
+                  ? Math.round(weatherData.hourly.wind_speed_10m[idx] * 10) / 10
+                  : null,
+              wind_direction:
+                slotWindId !== '—' ? (isEn ? translateWindDirectionToEn(slotWindId) : slotWindId) : '—',
+              weather_icon: getBmkgIconForWmoCode(wCode, hrWib),
+            });
+          }
+        }
+
         return res.json({
           source: 'Open-Meteo',
-          adm4: null,
+          adm4: '32.76.06.1005',
           location_name: 'Pondok Cina, Beji, Kota Depok',
           temperature_c: Math.round(cur.temperature_2m),
           humidity_percent: cur.relative_humidity_2m ?? null,
@@ -705,12 +791,12 @@ app.get('/api/live-weather', async (req, res) => {
           wind_direction: rawWindId !== '—' ? (isEn ? translateWindDirectionToEn(rawWindId) : rawWindId) : '—',
           visibility_km: visKm,
           cloud_cover_percent: typeof cur.cloud_cover === 'number' ? cur.cloud_cover : null,
-          weather_icon: '',
-          valid_at: fetchedAtWib,
+          weather_icon: getBmkgIconForWmoCode(Number(cur.weather_code), curHourWib),
+          valid_at: curParsed.fullLabel !== '—' ? curParsed.fullLabel : fetchedAtWib,
           valid_hour_wib: fetchedAtWib,
           analysis_date: null,
           last_updated: fetchedAtWib,
-          forecast_slots: [],
+          forecast_slots: upcomingSlots,
         });
       }
     }

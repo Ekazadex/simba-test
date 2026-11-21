@@ -1458,7 +1458,7 @@ export default function SCADADashboard({
               </span>
               <span className="font-mono text-[8px] text-[#3B82F6] uppercase tracking-wider mt-0.5">
                 {liveWeather?.source === 'Open-Meteo'
-                  ? (language === 'en' ? 'Open-Meteo Fallback // BMKG Unreachable' : 'Fallback Open-Meteo // API BMKG Tidak Terjangkau')
+                  ? (language === 'en' ? 'Open-Meteo Live Fallback // BMKG Feed Currently Empty' : 'Fallback Open-Meteo // Feed API BMKG Sedang Kosong')
                   : `API PUBLIK BMKG // ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
               </span>
             </div>
@@ -1608,7 +1608,9 @@ export default function SCADADashboard({
             <div className={`lg:col-span-4 flex flex-col gap-2 p-3.5 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className={`text-[9px] font-bold uppercase tracking-[0.18em] font-mono ${themeTextMuted}`}>
-                  {language === 'en' ? 'Upcoming BMKG Forecast (WIB)' : 'Prakiraan BMKG Berikutnya (WIB)'}
+                  {liveWeather.source === 'Open-Meteo'
+                    ? (language === 'en' ? 'Upcoming 3-Hourly Forecast (WIB)' : 'Prakiraan 3-Jaman Berikutnya (WIB)')
+                    : (language === 'en' ? 'Upcoming BMKG Forecast (WIB)' : 'Prakiraan BMKG Berikutnya (WIB)')}
                 </span>
                 <span className={`text-[8.5px] font-mono ${themeTextMuted}`}>
                   {liveWeather.valid_at || '—'}
