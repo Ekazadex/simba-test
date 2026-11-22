@@ -1066,7 +1066,7 @@ export default function App() {
 
       {/* SECURE ADMIN LOGIN MODAL */}
       {isLoginModalOpen && (
-        <div id="login-modal" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+        <div id="login-modal" className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
           <div className={`w-full max-w-md ${isDark ? 'bg-[#0D0D0F] border-white/5 text-white' : 'bg-white border-slate-200 text-slate-800 shadow-2xl'} rounded-2xl p-8 border relative`}>
             
             <button 
@@ -1103,7 +1103,7 @@ export default function App() {
                   type="text" 
                   value={inputUsername}
                   onChange={(e) => setInputUsername(e.target.value)}
-                  placeholder="Username admin"
+                  placeholder={language === 'en' ? 'Admin username' : 'Username admin'}
                   required
                   className={`px-3.5 py-2.5 text-xs rounded-xl border ${
                     isDark 

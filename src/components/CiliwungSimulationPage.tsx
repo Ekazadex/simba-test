@@ -879,7 +879,7 @@ export default function CiliwungSimulationPage({
           </div>
 
           {activeView === 'map2d' && (
-            <Map2D compact fillHeight simulation extraNodes={SIMULATION_UPSTREAM} fallbackLevel={null} config={{}} snapshot={map2dSnapshot} />
+            <Map2D compact fillHeight simulation extraNodes={SIMULATION_UPSTREAM} fallbackLevel={null} config={{}} snapshot={map2dSnapshot} language={language} />
           )}
 
           {activeView === 'map3d' && (

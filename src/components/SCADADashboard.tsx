@@ -1095,7 +1095,9 @@ export default function SCADADashboard({
 
             {/* 1. Bridge/Beam concrete ceiling & Sensor Probe */}
             <div className="absolute top-0 left-0 right-0 h-7 bg-zinc-700 border-b border-zinc-600 flex items-center justify-center px-2 z-10 shadow-sm">
-              <span className="text-[7px] font-mono text-zinc-300 tracking-widest uppercase truncate">TIANG PIPA & LENGAN BOOM DRAINASE KUKUSAN</span>
+              <span className="text-[7px] font-mono text-zinc-300 tracking-widest uppercase truncate">
+                {language === 'en' ? 'KUKUSAN DRAINAGE PIPE POLE & BOOM ARM' : 'TIANG PIPA & LENGAN BOOM DRAINASE KUKUSAN'}
+              </span>
 
               {/* JSN-SR04T Sensor Probe Visual */}
               <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 w-10 h-5 bg-zinc-800 rounded-b-md border-x border-b border-zinc-600 flex justify-around items-center px-1">
@@ -1221,7 +1223,7 @@ export default function SCADADashboard({
               <span className="font-mono text-[10px] text-[#3B82F6] tracking-wide mt-0.5">
                 {liveWeather?.source === 'Open-Meteo'
                   ? (language === 'en' ? 'Open-Meteo Live Fallback · BMKG Feed Currently Empty' : 'Fallback Open-Meteo · Feed API BMKG Sedang Kosong')
-                  : `API Publik BMKG · ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
+                  : `${language === 'en' ? 'BMKG Public API' : 'API Publik BMKG'} · ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
               </span>
             </div>
             {liveWeather?.valid_hour_wib && (
@@ -1274,7 +1276,7 @@ export default function SCADADashboard({
         ) : liveWeather ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
             {/* Left Zone: Verbatim BMKG Temperature, Condition & Location */}
-            <div className="lg:col-span-4 flex items-center gap-4">
+            <div className="lg:col-span-4 flex items-center lg:justify-center gap-4">
               <div className="relative flex-shrink-0">
                 {liveWeather.weather_icon ? (
                   <img

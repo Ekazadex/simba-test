@@ -188,6 +188,7 @@ export function Map2D({
   extraNodes = [],
   compact = false,
   fillHeight = false,
+  language = 'id',
 }: {
   snapshot: HardwareSnapshot | null;
   fallbackLevel: number | null;
@@ -196,7 +197,9 @@ export function Map2D({
   extraNodes?: Array<{ id: string; label: string; lat: number; lng: number }>;
   compact?: boolean;
   fillHeight?: boolean;
+  language?: 'id' | 'en';
 }) {
+  const en = language === 'en';
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const overlayLayerRef = useRef<L.LayerGroup | null>(null);
@@ -443,13 +446,13 @@ export function Map2D({
           `${simulation ? point.label.replace(/^(?:UP|N)\d+ · /, '') : point.label} · ${
             node
               ? node.valueType === 'simulation'
-                ? 'simulasi'
+                ? en ? 'simulation' : 'simulasi'
                 : node.valueType === 'derived_preset'
-                  ? 'turunan preset'
+                  ? en ? 'derived preset' : 'turunan preset'
                   : node.valueType === 'actual_sensor'
-                    ? 'sensor aktual'
+                    ? en ? 'actual sensor' : 'sensor aktual'
                     : 'reset'
-              : 'menunggu data'
+              : en ? 'waiting for data' : 'menunggu data'
           }${
             node && node.valueType !== 'reset'
               ? ` · ${node.tmaCm.toFixed(1)} cm · ${node.status} · ${isLive ? 'LIVE' : 'STALE'} · ${formatReadingTime(
@@ -467,7 +470,7 @@ export function Map2D({
       hasFittedRef.current = true;
     }
     window.setTimeout(() => map.invalidateSize(), 0);
-  }, [snapshot, condition, config, isLive, mapReady, showHeat, extraNodes, river, simulation]);
+  }, [snapshot, condition, config, isLive, mapReady, showHeat, extraNodes, river, simulation, en]);
 
   return (
     <div
@@ -479,7 +482,7 @@ export function Map2D({
       data-testid="hardware-map2d"
     >
       <div
-        className={`relative ${
+        className={`relative isolate z-0 ${
           fillHeight
             ? compact
               ? 'h-[380px] lg:h-auto lg:flex-1 min-h-[360px]'
@@ -487,11 +490,11 @@ export function Map2D({
             : 'h-[min(64vh,640px)] min-h-[440px]'
         } w-full overflow-hidden rounded-xl border border-slate-500/30 bg-slate-900`}
       >
-        <div ref={containerRef} className="absolute inset-0 z-0" aria-label="Peta interaktif OpenStreetMap koridor Ciliwung" />
+        <div ref={containerRef} className="absolute inset-0 z-0" aria-label={en ? 'Interactive OpenStreetMap of Ciliwung corridor' : 'Peta interaktif OpenStreetMap koridor Ciliwung'} />
         {showHeat && (
-          <div className="pointer-events-none absolute bottom-7 left-3 sm:bottom-3 z-[1000] rounded-xl border border-white/10 bg-slate-950/90 px-3 py-2 sm:px-3.5 sm:py-2.5 text-[10px] sm:text-[11px] text-slate-200 shadow-lg backdrop-blur">
+          <div className="pointer-events-none absolute bottom-7 left-3 sm:bottom-3 z-[500] rounded-xl border border-white/10 bg-slate-950/90 px-3 py-2 sm:px-3.5 sm:py-2.5 text-[10px] sm:text-[11px] text-slate-200 shadow-lg backdrop-blur">
             <div className="mb-1.5 font-bold uppercase tracking-wider text-slate-300 text-[9px] sm:text-[10px]">
-              Area indikatif · bukan batas banjir
+              {en ? 'Indicative area · not flood boundary' : 'Area indikatif · bukan batas banjir'}
             </div>
             <div className="grid grid-cols-2 gap-x-3.5 gap-y-1">
               <span>
@@ -500,47 +503,50 @@ export function Map2D({
               </span>
               <span>
                 <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-yellow-400" />
-                Air naik
+                {en ? 'Rising' : 'Air naik'}
               </span>
               <span>
                 <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-orange-500" />
-                Siaga
+                {en ? 'Alert' : 'Siaga'}
               </span>
               <span>
                 <i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-blue-600" />
-                Banjir
+                {en ? 'Flood' : 'Banjir'}
               </span>
             </div>
           </div>
         )}
         {riverError && (
-          <div role="status" className="absolute left-3 top-24 z-[1000] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white">
-            Data sungai tidak tersedia; area indikatif disembunyikan.
+          <div role="status" className="absolute left-3 top-24 z-[500] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white">
+            {en ? 'River data unavailable; indicative area hidden.' : 'Data sungai tidak tersedia; area indikatif disembunyikan.'}
           </div>
         )}
         {tileState !== 'ready' && (
-          <div role="status" className="absolute right-3 top-16 z-[1000] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white">
-            {tileState === 'error' ? 'Peta tidak tersedia. Periksa koneksi internet.' : 'Memuat peta…'}
+          <div role="status" className="absolute right-3 top-16 z-[500] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white">
+            {tileState === 'error'
+              ? (en ? 'Map unavailable. Check internet connection.' : 'Peta tidak tersedia. Periksa koneksi internet.')
+              : (en ? 'Loading map…' : 'Memuat peta…')}
           </div>
         )}
         <button
           type="button"
           onClick={() => setShowHeat(!showHeat)}
           aria-pressed={showHeat}
-          className="absolute left-3 top-3 z-[1000] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white cursor-pointer"
+          className="absolute left-3 top-3 z-[500] rounded-lg bg-slate-950/90 px-3 py-2 text-xs text-white cursor-pointer"
         >
-          {showHeat ? 'Sembunyikan area' : 'Tampilkan area'}
+          {showHeat ? (en ? 'Hide area' : 'Sembunyikan area') : (en ? 'Show area' : 'Tampilkan area')}
         </button>
       </div>
       {!compact && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs opacity-75">
           <span>
-            {simulation ? 'Data simulasi' : 'N1 Pos Depok'}: {level == null ? '—' : `${level.toFixed(1)} cm`} ·{' '}
-            {isLive ? (simulation ? 'AKTIF' : 'LIVE') : simulation ? 'TIDAK AKTIF' : 'STALE'}
+            {simulation ? (en ? 'Simulation data' : 'Data simulasi') : 'N1 Pos Depok'}: {level == null ? '—' : `${level.toFixed(1)} cm`} ·{' '}
+            {isLive ? (simulation ? (en ? 'ACTIVE' : 'AKTIF') : 'LIVE') : simulation ? (en ? 'INACTIVE' : 'TIDAK AKTIF') : 'STALE'}
           </span>
           <span>
-            Pita warna mengikuti jalur sungai berdasarkan status stasiun terdekat. Lebarnya hanya ilustrasi, bukan luas
-            atau kedalaman banjir.
+            {en
+              ? 'Color bands follow the river corridor based on the nearest station status. Width is illustrative only, not actual flood extent or depth.'
+              : 'Pita warna mengikuti jalur sungai berdasarkan status stasiun terdekat. Lebarnya hanya ilustrasi, bukan luas atau kedalaman banjir.'}
           </span>
         </div>
       )}
@@ -1590,7 +1596,7 @@ export default function CiliwungHardwareLiveView({
 
         <div className="mt-3.5 sm:mt-4 flex-1 flex flex-col min-w-0">
           {effectiveActiveView === 'map2d' && (
-            <Map2D snapshot={snapshot} fallbackLevel={fallbackLevel} config={config} compact fillHeight />
+            <Map2D snapshot={snapshot} fallbackLevel={fallbackLevel} config={config} compact fillHeight language={language} />
           )}
 
           {effectiveActiveView === 'map3d' && (
@@ -1741,7 +1747,7 @@ export default function CiliwungHardwareLiveView({
       )}
 
       <div className="mt-4">
-        {activeView === 'map2d' && <Map2D snapshot={snapshot} fallbackLevel={fallbackLevel} config={config} compact={compact} />}
+        {activeView === 'map2d' && <Map2D snapshot={snapshot} fallbackLevel={fallbackLevel} config={config} compact={compact} language={language} />}
 
         {activeView === 'graph' && (
           <div className="flex flex-col gap-4 xl:flex-row">
