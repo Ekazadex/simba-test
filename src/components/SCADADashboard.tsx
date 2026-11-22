@@ -1276,7 +1276,7 @@ export default function SCADADashboard({
         ) : liveWeather ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
             {/* Left Zone: Verbatim BMKG Temperature, Condition & Location */}
-            <div className="lg:col-span-4 flex items-center lg:justify-center gap-4">
+            <div className="lg:col-span-4 flex items-center justify-center gap-4">
               <div className="relative flex-shrink-0">
                 {liveWeather.weather_icon ? (
                   <img
