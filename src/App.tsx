@@ -416,7 +416,11 @@ export default function App() {
       setInputPassword('');
       handleSelectTab('admin');
     } else {
-      setLoginError('Nama pengguna atau kata sandi salah. Silakan coba lagi.');
+      setLoginError(
+        language === 'en'
+          ? 'Invalid username or password. Please try again.'
+          : 'Nama pengguna atau kata sandi salah. Silakan coba lagi.'
+      );
     }
   };
 
@@ -746,7 +750,7 @@ export default function App() {
                       ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-400 hover:text-rose-400'
                       : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-500 hover:text-rose-600 shadow-sm'
                   }`}
-                  title="Keluar Konsol"
+                  title={language === 'en' ? 'Sign Out Console' : 'Keluar Konsol'}
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -762,7 +766,7 @@ export default function App() {
                   className="flex items-center gap-2 px-4 py-1.5 bg-[#3B82F6] hover:bg-blue-600 text-black text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md whitespace-nowrap shrink-0"
                 >
                   <LogIn className="w-3.5 h-3.5" />
-                  Login Admin PLC
+                  {language === 'en' ? 'PLC Admin Login' : 'Login Admin PLC'}
                 </button>
               </div>
             )}
@@ -933,7 +937,7 @@ export default function App() {
                   className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#3B82F6] hover:bg-blue-500 text-black text-xs font-bold rounded-xl transition-all cursor-pointer"
                 >
                   <LogIn className="w-3.5 h-3.5" />
-                  Login Admin PLC
+                  {language === 'en' ? 'PLC Admin Login' : 'Login Admin PLC'}
                 </button>
               )}
             </div>
@@ -1008,7 +1012,7 @@ export default function App() {
       )}
 
       {/* CORE WORKSPACE CONTENT AREA */}
-      <main id="main-content" className="flex-grow px-3 py-4 sm:px-4 lg:p-8 max-w-7xl mx-auto w-full min-w-0">
+      <main id="main-content" className="flex-grow px-3 py-4 sm:px-5 lg:px-8 lg:py-5 max-w-7xl mx-auto w-full min-w-0">
         {activeTab === 'dashboard' ? (
           <SCADADashboard 
             config={config} 
@@ -1054,7 +1058,7 @@ export default function App() {
       </main>
 
       {/* METADATA SYSTEM CREDIT FOOTER */}
-      <footer id="console-footer" className={`${themeFooter} py-6 text-center text-[9px] uppercase tracking-[0.4em] rounded-b-xl ${
+      <footer id="console-footer" className={`${themeFooter} py-5 text-center text-[9px] uppercase tracking-[0.14em] sm:tracking-[0.26em] lg:tracking-[0.35em] leading-relaxed rounded-b-xl ${
         isDark ? 'text-white/30' : 'text-slate-400'
       }`}>
         <p className="max-w-7xl mx-auto px-4">
@@ -1067,7 +1071,7 @@ export default function App() {
       {/* SECURE ADMIN LOGIN MODAL */}
       {isLoginModalOpen && (
         <div id="login-modal" className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className={`w-full max-w-md ${isDark ? 'bg-[#0D0D0F] border-white/5 text-white' : 'bg-white border-slate-200 text-slate-800 shadow-2xl'} rounded-2xl p-8 border relative`}>
+          <div className={`w-full max-w-md ${isDark ? 'bg-[#0D0D0F] border-white/5 text-white' : 'bg-white border-slate-200 text-slate-800 shadow-2xl'} rounded-2xl p-6 sm:p-8 border relative`}>
             
             <button 
               onClick={() => setIsLoginModalOpen(false)}
@@ -1081,7 +1085,7 @@ export default function App() {
               </svg>
             </button>
 
-            <div className={`w-12 h-12 ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-150 border-slate-200'} text-[#3B82F6] rounded-full flex items-center justify-center mx-auto mb-5`}>
+            <div className={`w-12 h-12 ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'} border text-[#3B82F6] rounded-full flex items-center justify-center mx-auto mb-5`}>
               <Lock className="w-5 h-5 animate-pulse" />
             </div>
 

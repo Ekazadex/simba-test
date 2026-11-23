@@ -28,9 +28,10 @@ interface CiliwungOfficial3DViewProps {
 
 const HARDWARE_NODE_IDS = new Set(['N1', 'N2', 'N3', 'N4', 'N5']);
 
-function formatStatusLabel(status?: string) {
-  if (!status) return 'AMAN';
-  if (status === 'BANJIR_JAKARTA') return 'BANJIR';
+function formatStatusLabel(status?: string, en = false) {
+  if (!status || status === 'AMAN') return en ? 'SAFE' : 'AMAN';
+  if (status === 'BANJIR_JAKARTA') return en ? 'FLOOD' : 'BANJIR';
+  if (status === 'SIAGA') return en ? 'ALERT' : 'SIAGA';
   return status;
 }
 
@@ -253,9 +254,14 @@ export default function CiliwungOfficial3DView({
         }
 
         // Resize observer keeps aspect ratio crisp inside responsive containers
+        let resizeRafId = 0;
         if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
           resizeObserver = new ResizeObserver(() => {
-            app.resize();
+            if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
+            resizeRafId = window.requestAnimationFrame(() => {
+              resizeRafId = 0;
+              if (!cancelled) app.resize();
+            });
           });
           resizeObserver.observe(containerRef.current);
         }
@@ -280,7 +286,7 @@ export default function CiliwungOfficial3DView({
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        setErrorMessage(msg || 'Gagal memuat visualisasi 3D.');
+        setErrorMessage(msg || (en ? 'Failed to load 3D visualization.' : 'Gagal memuat visualisasi 3D.'));
         setPhase('error');
       }
     };
@@ -421,7 +427,7 @@ export default function CiliwungOfficial3DView({
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="text-[10px] font-mono uppercase tracking-wider text-sky-400">
-                {activeMeta.id} · {activeMeta.elevationM.toFixed(0)} m mdpl
+                {activeMeta.id} · {activeMeta.elevationM.toFixed(0)} {en ? 'm asl' : 'm mdpl'}
               </div>
               <div className="mt-0.5 text-sm font-bold text-white">{activeMeta.name}</div>
             </div>
@@ -430,7 +436,7 @@ export default function CiliwungOfficial3DView({
                 activeTelemetry?.status
               )}`}
             >
-              {formatStatusLabel(activeTelemetry?.status)}
+              {formatStatusLabel(activeTelemetry?.status, en)}
             </span>
           </div>
 

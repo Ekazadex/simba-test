@@ -63,19 +63,24 @@ if (typeof window !== 'undefined') {
     }
   });
 
-  window.addEventListener('error', (event) => {
-    if (
-      event.message &&
-      (event.message.includes('WebSocket') ||
-       event.message.includes('vite') ||
-       event.message.includes('hmr') ||
-       event.message.includes('fetch') ||
-       event.message.includes('websocket'))
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  });
+  window.addEventListener(
+    'error',
+    (event) => {
+      if (
+        event.message &&
+        (event.message.includes('ResizeObserver loop') ||
+         event.message.includes('WebSocket') ||
+         event.message.includes('vite') ||
+         event.message.includes('hmr') ||
+         event.message.includes('fetch') ||
+         event.message.includes('websocket'))
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    },
+    true
+  );
 }
 
 createRoot(document.getElementById('root')!).render(

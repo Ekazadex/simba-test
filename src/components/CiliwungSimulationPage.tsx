@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Curve } from 'recharts';
+import {
+  Map as MapIcon,
+  LineChart as LineChartIcon,
+  Info,
+  Play,
+  Square,
+  RotateCcw,
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { Map2D } from './CiliwungHardwareLiveView';
 import CiliwungOfficial3DView from './CiliwungOfficial3DView';
 import graphScale from './ciliwung-graph-scale.json';
@@ -9,6 +20,8 @@ import { getApiBaseUrl } from '../utils/apiBase';
 type ScenarioId = 'ringan' | 'sedang' | 'lebat';
 type SpeedMultiplier = 1 | 10 | 25 | 50 | 150;
 type SimulationView = 'map2d' | 'map3d' | 'graph';
+type SimulationTab = 'map' | 'graph';
+type MapLayer = 'map3d' | 'map2d';
 type SimulationMode = 'legacy' | 'rain_replay';
 type Episode = { episodeId: string; label?: string; name?: string };
 
@@ -87,24 +100,27 @@ const SIMULATION_UPSTREAM = [
   { id: 'UP4', label: 'UP4 · Cibinong', lat: -6.4650414, lng: 106.8180795 },
 ];
 
-const SCENARIOS: Array<{ id: ScenarioId; label: string; descriptionId: string; descriptionEn: string }> = [
+const SCENARIOS: Array<{ id: ScenarioId; labelId: string; labelEn: string; descriptionId: string; descriptionEn: string }> = [
   {
     id: 'ringan',
-    label: 'Hujan Ringan',
+    labelId: 'Hujan Ringan',
+    labelEn: 'Light Rain',
     descriptionId: 'Skenario berakhir saat pos hulu Puncak (UP1) mencapai SIAGA.',
-    descriptionEn: 'Scenario completes when Puncak (UP1) reaches SIAGA.',
+    descriptionEn: 'Scenario completes when Puncak (UP1) reaches ALERT.',
   },
   {
     id: 'sedang',
-    label: 'Hujan Sedang',
+    labelId: 'Hujan Sedang',
+    labelEn: 'Moderate Rain',
     descriptionId: 'Skenario berakhir saat Ciliwung Stage 2 (N3) mencapai SIAGA.',
-    descriptionEn: 'Scenario completes when Stage 2 (N3) reaches SIAGA.',
+    descriptionEn: 'Scenario completes when Stage 2 (N3) reaches ALERT.',
   },
   {
     id: 'lebat',
-    label: 'Hujan Lebat',
+    labelId: 'Hujan Lebat',
+    labelEn: 'Heavy Rain',
     descriptionId: 'Skenario berakhir saat Pintu Air Manggarai (N5) mencapai BANJIR.',
-    descriptionEn: 'Scenario completes when Manggarai (N5) reaches BANJIR_JAKARTA.',
+    descriptionEn: 'Scenario completes when Manggarai (N5) reaches FLOOD.',
   },
 ];
 
@@ -118,9 +134,17 @@ function formatTime(seconds: number) {
   return `${String(minutes).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
-function statusLabel(status: CiliwungNode['status']) {
-  if (status === 'BANJIR_JAKARTA') return 'BANJIR';
-  return status;
+function statusLabel(status: CiliwungNode['status'], en = false) {
+  if (status === 'BANJIR_JAKARTA') return en ? 'FLOOD' : 'BANJIR';
+  if (status === 'SIAGA') return en ? 'ALERT' : 'SIAGA';
+  return en ? 'SAFE' : 'AMAN';
+}
+
+function simStatusLabel(status: CiliwungState['status'] | undefined, en = false) {
+  if (status === 'running') return en ? 'RUNNING' : 'BERJALAN';
+  if (status === 'completed') return en ? 'COMPLETED' : 'SELESAI';
+  if (status === 'stopped') return en ? 'STOPPED' : 'BERHENTI';
+  return en ? 'IDLE' : 'STANDBY';
 }
 
 export default function CiliwungSimulationPage({
@@ -142,7 +166,10 @@ export default function CiliwungSimulationPage({
   const [selectedEpisodeId, setSelectedEpisodeId] = useState('');
   const [episodeError, setEpisodeError] = useState<string | null>(null);
   const [selectedSpeed, setSelectedSpeed] = useState<SpeedMultiplier>(1);
-  const [activeView, setActiveView] = useState<SimulationView>('map3d');
+  const [simTab, setSimTab] = useState<SimulationTab>('map');
+  const [mapLayer, setMapLayer] = useState<MapLayer>('map3d');
+  const [showScenarioDetails, setShowScenarioDetails] = useState(false);
+  const activeView: SimulationView = simTab === 'graph' ? 'graph' : mapLayer;
   const [state, setState] = useState<CiliwungState | null>(null);
   const [forecasts, setForecasts] = useState<Record<string, CiliwungForecast>>({});
   const [history, setHistory] = useState<HistoryPoint[]>([]);
@@ -527,10 +554,14 @@ export default function CiliwungSimulationPage({
         body: body ? JSON.stringify(body) : undefined,
       });
       const payload = await response.json();
-      if (!response.ok || payload.success === false) throw new Error(payload.error || 'Permintaan simulasi gagal.');
+      if (!response.ok || payload.success === false) {
+        throw new Error(payload.error || (en ? 'Simulation request failed.' : 'Permintaan simulasi gagal.'));
+      }
       return payload;
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : 'Permintaan simulasi gagal.';
+      const message = requestError instanceof Error
+        ? requestError.message
+        : (en ? 'Simulation request failed.' : 'Permintaan simulasi gagal.');
       setError(message);
       return null;
     } finally {
@@ -600,175 +631,196 @@ export default function CiliwungSimulationPage({
   );
 
   return (
-    <div className={`min-h-[calc(100vh-5rem)] ${isDark ? 'text-slate-200' : 'text-slate-700'} flex flex-col gap-6`}>
-      <section className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-5 lg:p-7`}>
-        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
-          <div>
-            <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.25em] text-[#3B82F6] mb-2">
-              <span className="w-2 h-2 rounded-full bg-[#3B82F6] animate-pulse" />
-              {en ? 'Ciliwung 9-Node Hydrological Simulation' : 'Mode Simulasi 9-Node DAS Ciliwung'}
+    <div id="simulation-page-root" className={`${isDark ? 'text-slate-200' : 'text-slate-700'} flex flex-col gap-4 pb-6`}>
+      {/* COMPACT SCENARIO & RUNTIME CONTROL BAR */}
+      <section
+        id="simulation-control-bar"
+        className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border px-4 py-3.5 sm:px-5 flex flex-col gap-3`}
+      >
+        {/* Top Row: Compact Title + Status Telemetry + Back Button */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${isRunning ? 'bg-amber-400 animate-ping' : 'bg-[#3B82F6]'}`} />
+              <h1 className={`text-sm sm:text-base font-bold truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                {en ? 'Ciliwung 9-Node Simulation' : 'Simulasi 9-Node DAS Ciliwung'}
+              </h1>
             </div>
-            <h1 className={`text-2xl lg:text-3xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-              {en ? 'Watershed Routing & Prognostic Simulation' : 'Simulasi Skenario & Propagasi Banjir Ciliwung'}
-            </h1>
-            <p className={`text-sm mt-2 max-w-2xl ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              {en
-                ? 'Deterministic propagation across 9 stations (Puncak UP1 → Manggarai N5) synchronized live across 3D visualization, 2D corridor map, and prognostic forecasts.'
-                : 'Propagasi hidrologi deterministik lintas 9 stasiun (Puncak UP1 → Manggarai N5) yang tersinkronisasi antara peta 3D, peta 2D, dan kurva prediksi.'}
-            </p>
+
+            {/* Live Compact Telemetry Chips */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono tabular-nums">
+              <span
+                className={`px-2 py-0.5 rounded-md border uppercase font-bold ${
+                  state?.status === 'completed'
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                    : state?.status === 'running'
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                      : isDark
+                        ? 'border-white/10 bg-white/[0.03] text-slate-400'
+                        : 'border-slate-200 bg-slate-100 text-slate-600'
+                }`}
+              >
+                {simStatusLabel(state?.status, en)} · {formatTime(state?.simTimeSeconds ?? 0)}
+              </span>
+
+              <span
+                className={`px-2 py-0.5 rounded-md border ${
+                  cupCarbonActive
+                    ? isDark
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : isDark
+                      ? 'border-white/10 bg-white/[0.03] text-slate-400'
+                      : 'border-slate-200 bg-slate-50 text-slate-500'
+                }`}
+              >
+                CupCarbon {cupCarbonNodeCount}/9 · {cupCarbonActive ? (en ? 'ACTIVE' : 'AKTIF') : 'STANDBY'}
+              </span>
+
+              {state?.targetNodeId && (
+                <span className={`hidden md:inline-flex px-2 py-0.5 rounded-md border ${isDark ? 'border-white/10 bg-white/[0.03] text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                  Target: {state.cupNodes.find((node) => node.id === state.targetNodeId)?.name ?? state.targetNodeId}
+                </span>
+              )}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={handleExit}
-            className={`px-4 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-              isDark
-                ? 'border-white/10 bg-white/5 hover:bg-white/10 text-slate-300'
-                : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-            }`}
-          >
-            {en ? 'Return to Live Hardware' : 'Kembali ke Hardware Live'}
-          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowScenarioDetails((prev) => !prev)}
+              aria-expanded={showScenarioDetails}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                showScenarioDetails
+                  ? 'border-[#3B82F6]/40 bg-[#3B82F6]/10 text-[#3B82F6]'
+                  : isDark
+                    ? 'border-white/10 bg-white/5 hover:bg-white/10 text-slate-300'
+                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
+              }`}
+              title={en ? 'Toggle scenario explanation' : 'Tampilkan atau sembunyikan detail skenario'}
+            >
+              <Info className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{en ? 'Details' : 'Detail'}</span>
+              {showScenarioDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExit}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all cursor-pointer ${
+                isDark
+                  ? 'border-white/10 bg-white/5 hover:bg-white/10 text-slate-300'
+                  : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+              }`}
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>{en ? 'Live Hardware' : 'Hardware Live'}</span>
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] gap-5 mt-6">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap gap-2 text-xs font-bold">
+        {/* Second Row: Inline Controls (Mode + Scenario/Episode + Speed + Run Controls) */}
+        <div className={`pt-2.5 border-t ${isDark ? 'border-white/5' : 'border-slate-100'} flex flex-col xl:flex-row xl:items-center justify-between gap-2.5`}>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap min-w-0">
+            {/* Mode Switch */}
+            <div
+              className={`grid grid-cols-2 sm:inline-flex p-0.5 rounded-lg border text-[11px] font-bold ${
+                isDark ? 'border-white/10 bg-black/40' : 'border-slate-200 bg-slate-100'
+              }`}
+            >
               <button
                 type="button"
                 disabled={busy || isRunning}
                 onClick={() => setSelectedMode('legacy')}
-                className={`rounded-lg border px-3.5 py-2 disabled:opacity-50 cursor-pointer ${
-                  selectedMode === 'legacy' ? 'border-[#3B82F6] bg-[#3B82F6]/15 text-[#3B82F6]' : 'border-white/10'
+                className={`px-2.5 py-1.5 rounded-md transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap ${
+                  selectedMode === 'legacy'
+                    ? 'bg-[#3B82F6] text-black shadow-sm'
+                    : isDark
+                      ? 'text-slate-400 hover:text-white'
+                      : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {en ? 'Routing Scenarios' : 'Skenario Propagasi'}
+                {en ? 'Routing' : 'Skenario'}
               </button>
               <button
                 type="button"
                 disabled={busy || isRunning}
                 onClick={() => setSelectedMode('rain_replay')}
-                className={`rounded-lg border px-3.5 py-2 disabled:opacity-50 cursor-pointer ${
-                  selectedMode === 'rain_replay' ? 'border-[#3B82F6] bg-[#3B82F6]/15 text-[#3B82F6]' : 'border-white/10'
+                className={`px-2.5 py-1.5 rounded-md transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap ${
+                  selectedMode === 'rain_replay'
+                    ? 'bg-[#3B82F6] text-black shadow-sm'
+                    : isDark
+                      ? 'text-slate-400 hover:text-white'
+                      : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {en ? 'Synthetic Replay + Forecast' : 'Synthetic Replay + Prediksi'}
+                {en ? 'Replay 24h' : 'Replay 24J'}
               </button>
             </div>
 
-            {selectedMode === 'rain_replay' && (
+            {/* Scenario Pills OR Synthetic Replay Episode Selector */}
+            {selectedMode === 'legacy' ? (
               <div
-                className={`rounded-xl border p-4 text-xs ${
-                  isDark ? 'border-blue-500/30 bg-blue-500/10' : 'border-blue-200 bg-blue-50'
+                className={`grid grid-cols-3 sm:inline-flex p-0.5 rounded-lg border text-[11px] font-bold ${
+                  isDark ? 'border-white/10 bg-black/40' : 'border-slate-200 bg-slate-100'
+                }`}
+                role="group"
+                aria-label={en ? 'Rainfall scenario' : 'Pilihan skenario hujan'}
+              >
+                {SCENARIOS.map((scenario) => (
+                  <button
+                    key={scenario.id}
+                    type="button"
+                    onClick={() => setSelectedScenario(scenario.id)}
+                    disabled={busy || isRunning}
+                    title={en ? scenario.descriptionEn : scenario.descriptionId}
+                    className={`px-2 sm:px-3 py-1.5 rounded-md text-[10.5px] sm:text-[11px] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ${
+                      selectedScenario === scenario.id
+                        ? isDark
+                          ? 'bg-white/15 text-white border border-[#3B82F6]/60'
+                          : 'bg-white text-slate-900 border border-[#3B82F6]/60 shadow-sm'
+                        : isDark
+                          ? 'text-slate-400 hover:text-slate-200'
+                          : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {en ? scenario.labelEn : scenario.labelId}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <select
+                id="synthetic-episode"
+                aria-label="Synthetic episode"
+                value={selectedEpisodeId}
+                onChange={(event) => setSelectedEpisodeId(event.target.value)}
+                disabled={busy || isRunning || episodes.length === 0}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium min-w-[200px] sm:max-w-xs outline-none ${
+                  isDark ? 'bg-black/40 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-800'
                 }`}
               >
-                <strong className="block mb-2">SYNTHETIC REPLAY · Hidrologi 24-Jam (5-Menit Step)</strong>
-                <label className="block mb-2" htmlFor="synthetic-episode">
-                  {en ? 'Episode (synthetic rainfall & TMA)' : 'Pilih Episode (curah hujan & TMA sintetis)'}
-                </label>
-                <select
-                  id="synthetic-episode"
-                  aria-label="Synthetic episode"
-                  value={selectedEpisodeId}
-                  onChange={(event) => setSelectedEpisodeId(event.target.value)}
-                  disabled={busy || isRunning || episodes.length === 0}
-                  className={`w-full rounded-lg border px-3 py-2 ${
-                    isDark ? 'bg-black/40 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-800'
-                  }`}
-                >
-                  {episodes.length === 0 && <option value="">{en ? 'No episodes available' : 'Tidak ada episode tersedia'}</option>}
-                  {episodes.map((episode) => (
-                    <option key={episode.episodeId} value={episode.episodeId}>
-                      {episode.label || episode.name || episode.episodeId}
-                    </option>
-                  ))}
-                </select>
-                {episodeError && (
-                  <p role="alert" className="mt-2 text-rose-400">
-                    {episodeError}
-                  </p>
-                )}
-              </div>
+                {episodes.length === 0 && <option value="">{en ? 'No episodes available' : 'Tidak ada episode tersedia'}</option>}
+                {episodes.map((episode) => (
+                  <option key={episode.episodeId} value={episode.episodeId}>
+                    {episode.label || episode.name || episode.episodeId}
+                  </option>
+                ))}
+              </select>
             )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {SCENARIOS.map((scenario) => (
-                <button
-                  key={scenario.id}
-                  type="button"
-                  onClick={() => setSelectedScenario(scenario.id)}
-                  disabled={busy || isRunning || selectedMode === 'rain_replay'}
-                  className={`text-left rounded-xl border p-4 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    selectedScenario === scenario.id
-                      ? 'border-[#3B82F6] bg-[#3B82F6]/15 shadow-md'
-                      : isDark
-                        ? 'border-white/10 bg-black/20 hover:bg-white/5'
-                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
-                  }`}
-                >
-                  <span className={`block text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{scenario.label}</span>
-                  <span className={`block text-[11px] leading-relaxed mt-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {en ? scenario.descriptionEn : scenario.descriptionId}
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <div
-              className={`rounded-xl border p-4 text-xs ${
-                isDark ? 'border-white/10 bg-black/20 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'
-              }`}
-            >
-              <strong className={isDark ? 'text-white' : 'text-slate-800'}>{selectedProfile.label}</strong> ·{' '}
-              {en ? selectedProfile.descriptionEn : selectedProfile.descriptionId}
-            </div>
           </div>
 
-          <div
-            className={`${
-              isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'
-            } rounded-xl border p-4 flex flex-col gap-3`}
-          >
-            <div className="flex justify-between items-center text-[10px] font-mono uppercase tracking-widest">
-              <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>
-                {en ? 'Simulation status' : 'Status simulasi'}
+          {/* Right Runtime Action Group: Speed + Start / Stop / Reset */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5">
+              <span className={`text-[10px] font-mono uppercase ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
+                {en ? 'Speed' : 'Kecepatan'}
               </span>
-              <span
-                className={
-                  state?.status === 'completed'
-                    ? 'text-emerald-400'
-                    : state?.status === 'running'
-                      ? 'text-amber-400'
-                      : 'text-slate-400'
-                }
-              >
-                {state?.status ?? 'idle'}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <span className="block text-[10px] text-slate-500 uppercase">{en ? 'Time' : 'Waktu'}</span>
-                <strong>{formatTime(state?.simTimeSeconds ?? 0)}</strong>
-              </div>
-              <div>
-                <span className="block text-[10px] text-slate-500 uppercase">Target</span>
-                <strong>{state?.cupNodes.find((node) => node.id === state.targetNodeId)?.name ?? '—'}</strong>
-              </div>
-            </div>
-            <div className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white'}`}>
-              <div>
-                <span className="block text-[10px] text-slate-500 uppercase">
-                  {en ? 'Simulation speed' : 'Kecepatan simulasi'}
-                </span>
-                <span className="text-[11px] text-slate-400">
-                  {en ? 'Accelerates scenario time' : 'Mempercepat waktu simulasi'}
-                </span>
-              </div>
               <select
                 aria-label="Simulation speed"
                 value={isRunning ? state?.speedMultiplier ?? selectedSpeed : selectedSpeed}
                 onChange={handleSpeedChange}
                 disabled={busy}
-                className={`rounded-lg border px-3 py-2 text-xs font-bold outline-none ${
+                className={`rounded-lg border px-2.5 py-1.5 text-xs font-mono font-bold outline-none ${
                   isDark ? 'border-white/10 bg-black/40 text-white' : 'border-slate-200 bg-white text-slate-700'
                 }`}
               >
@@ -779,146 +831,279 @@ export default function CiliwungSimulationPage({
                 ))}
               </select>
             </div>
-            <div
-              className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
-                isDark ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white'
-              }`}
-            >
-              <div>
-                <span className="block text-[10px] text-slate-500 uppercase">CupCarbon bridge</span>
-                <span className="text-[11px] text-slate-400">{cupCarbonNodeCount}/9 node telemetry</span>
-              </div>
-              <span
-                className={`rounded-full border px-2 py-1 text-[9px] font-bold ${
-                  cupCarbonActive
-                    ? isDark
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : isDark
-                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                      : 'border-amber-200 bg-amber-50 text-amber-700'
-                }`}
-              >
-                {cupCarbonActive ? 'ACTIVE' : 'STANDBY'}
-              </span>
-            </div>
-            <div className="flex gap-2">
+
+            <div className="flex items-center gap-1.5 flex-1 sm:flex-initial">
               <button
                 type="button"
                 onClick={handleStart}
                 disabled={busy || isRunning || (selectedMode === 'rain_replay' && !selectedEpisodeId)}
-                className="flex-1 px-3 py-2 rounded-lg bg-[#3B82F6] hover:bg-blue-500 text-black text-xs font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#3B82F6] hover:bg-blue-400 text-black text-xs font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
               >
-                {isRunning
-                  ? en
-                    ? 'Running...'
-                    : 'Berjalan...'
-                  : selectedMode === 'rain_replay'
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>
+                  {isRunning
                     ? en
-                      ? 'Start Replay'
-                      : 'Mulai Replay'
-                    : en
-                      ? 'Start Simulation'
-                      : 'Mulai Simulasi'}
+                      ? 'Running...'
+                      : 'Berjalan...'
+                    : selectedMode === 'rain_replay'
+                      ? en
+                        ? 'Start Replay'
+                        : 'Mulai Replay'
+                      : en
+                        ? 'Start'
+                        : 'Mulai'}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={handleStop}
                 disabled={busy || !isRunning}
-                className={`px-3 py-2 rounded-lg border text-xs font-bold cursor-pointer disabled:opacity-50 ${
+                className={`inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg border text-xs font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap ${
                   isDark ? 'border-white/10 bg-white/5 hover:bg-white/10' : 'border-slate-200 bg-white hover:bg-slate-100'
                 }`}
               >
-                {en ? 'Stop' : 'Hentikan'}
+                <Square className="w-3 h-3" />
+                <span>{en ? 'Stop' : 'Hentikan'}</span>
               </button>
               <button
                 type="button"
                 onClick={handleReset}
                 disabled={busy}
-                className={`px-3 py-2 rounded-lg border text-xs font-bold cursor-pointer disabled:opacity-50 ${
+                className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap ${
                   isDark ? 'border-white/10 bg-white/5 hover:bg-white/10' : 'border-slate-200 bg-white hover:bg-slate-100'
                 }`}
+                title="Reset"
               >
-                Reset
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Reset</span>
               </button>
             </div>
           </div>
         </div>
 
-        {error && (
-          <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 p-3 text-xs">{error}</div>
+        {/* Optional Collapsible Scenario Explanation */}
+        {showScenarioDetails && (
+          <div
+            className={`rounded-xl border p-3.5 text-xs leading-relaxed ${
+              isDark ? 'border-white/10 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'
+            }`}
+          >
+            <p className="mb-2">
+              {en
+                ? 'Deterministic propagation across 9 stations (Puncak UP1 → Manggarai N5) synchronized live across 3D visualization, 2D corridor map, and +30m prognostic forecasts.'
+                : 'Propagasi hidrologi deterministik lintas 9 stasiun (Puncak UP1 → Manggarai N5) yang tersinkronisasi antara peta 3D, peta 2D, dan kurva prediksi +30 menit.'}
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {SCENARIOS.map((sc) => (
+                <div
+                  key={sc.id}
+                  className={`rounded-lg border px-3 py-2 ${
+                    selectedScenario === sc.id && selectedMode === 'legacy'
+                      ? 'border-[#3B82F6]/50 bg-[#3B82F6]/10'
+                      : isDark
+                        ? 'border-white/5 bg-white/[0.02]'
+                        : 'border-slate-200 bg-white'
+                  }`}
+                >
+                  <strong className={`block text-[11px] ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                    {en ? sc.labelEn : sc.labelId}
+                  </strong>
+                  <span className="text-[11px] opacity-80">{en ? sc.descriptionEn : sc.descriptionId}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(error || episodeError) && (
+          <div
+            role="alert"
+            className={`rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs ${
+              isDark ? 'text-rose-300' : 'text-rose-700'
+            }`}
+          >
+            {error || episodeError}
+          </div>
         )}
       </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)] gap-5 items-stretch">
-        <div className="min-w-0 flex flex-col gap-4">
-          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-0 sm:flex-wrap" role="group" aria-label={en ? 'Simulation viewer' : 'Tampilan simulasi'}>
-            {(
-              [
-                ['map3d', en ? '3D Watershed Map' : 'Simulasi Peta 3D'],
-                ['map2d', en ? '2D Corridor Map' : 'Peta 2D'],
-                ['graph', en ? 'Forecast Graph (+30m)' : 'Grafik Prediksi (+30m)'],
-              ] as const
-            ).map(([view, label]) => (
-              <button
-                key={view}
-                type="button"
-                aria-pressed={activeView === view}
-                onClick={() => setActiveView(view)}
-                className={`px-3 sm:px-4 py-2 rounded-xl text-[11px] sm:text-xs font-bold cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
-                  activeView === view
-                    ? 'bg-[#3B82F6] text-black'
-                    : isDark
-                      ? 'bg-white/5 text-slate-400 hover:text-white'
-                      : 'bg-slate-100 text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+      {/* 2 CLEAN TOP-LEVEL SIMULATION TABS (VISUALISASI PETA 3D/2D & GRAFIK PREDIKSI +30M) */}
+      <div
+        id="simulation-subtabs"
+        role="tablist"
+        aria-label={en ? 'Simulation tabs' : 'Tab tampilan simulasi'}
+        className={`grid grid-cols-2 gap-1.5 sm:gap-2 p-1.5 rounded-2xl border ${
+          isDark ? 'bg-[#0D0D0F] border-white/10' : 'bg-white border-slate-200 shadow-sm'
+        }`}
+      >
+        <button
+          id="btn-sim-tab-map"
+          type="button"
+          role="tab"
+          aria-selected={simTab === 'map'}
+          onClick={() => setSimTab('map')}
+          className={`flex items-center justify-center sm:justify-between gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            simTab === 'map'
+              ? 'bg-[#3B82F6] text-black shadow-sm'
+              : isDark
+                ? 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+          }`}
+        >
+          <span className="flex items-center gap-2 min-w-0">
+            <MapIcon className="w-4 h-4 shrink-0" />
+            <span className="truncate">{en ? 'Map Visualization (3D / 2D)' : 'Visualisasi Peta (3D / 2D)'}</span>
+          </span>
+          <span
+            className={`hidden md:inline-flex font-mono text-[10px] font-bold px-2 py-0.5 rounded-md uppercase shrink-0 ${
+              simTab === 'map' ? 'bg-black/15 text-black' : isDark ? 'bg-white/[0.05] text-sky-400' : 'bg-slate-100 text-sky-700'
+            }`}
+          >
+            {mapLayer === 'map3d' ? (en ? '3D Mode' : 'Mode 3D') : (en ? '2D Mode' : 'Mode 2D')}
+          </span>
+        </button>
 
-          {activeView === 'map2d' && (
-            <Map2D compact fillHeight simulation extraNodes={SIMULATION_UPSTREAM} fallbackLevel={null} config={{}} snapshot={map2dSnapshot} language={language} />
-          )}
+        <button
+          id="btn-sim-tab-graph"
+          type="button"
+          role="tab"
+          aria-selected={simTab === 'graph'}
+          onClick={() => setSimTab('graph')}
+          className={`flex items-center justify-center sm:justify-between gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            simTab === 'graph'
+              ? 'bg-[#3B82F6] text-black shadow-sm'
+              : isDark
+                ? 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+          }`}
+        >
+          <span className="flex items-center gap-2 min-w-0">
+            <LineChartIcon className="w-4 h-4 shrink-0" />
+            <span className="truncate">{en ? 'Forecast Graph (+30m)' : 'Grafik Prediksi (+30m)'}</span>
+          </span>
+          <span
+            className={`hidden md:inline-flex font-mono text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums shrink-0 ${
+              simTab === 'graph' ? 'bg-black/15 text-black' : isDark ? 'bg-white/[0.05] text-violet-400' : 'bg-slate-100 text-violet-700'
+            }`}
+          >
+            {currentNode ? `${currentNode.id} · ${Number.isFinite(currentNode.tmaCm) ? currentNode.tmaCm.toFixed(1) : '—'} cm` : graphNodeId}
+          </span>
+        </button>
+      </div>
 
-          {activeView === 'map3d' && (
+      {/* MAIN VIEWPORT-FITTED CONTENT GRID (2FR VIEWER + 1FR 9-NODE LIST) */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(270px,1fr)] gap-4 lg:gap-5 items-stretch">
+        <div className="min-w-0 flex flex-col">
+          {/* TAB 1: MAP VISUALIZATION (WITH INLINE 3D / 2D LAYER SWITCH) */}
+          {simTab === 'map' && (
             <section
-              className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-3 lg:p-5 flex flex-1 flex-col gap-3`}
+              className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-3.5 lg:p-4 flex flex-1 flex-col gap-3`}
             >
-              <div className={`flex items-start sm:items-center justify-between gap-2 px-1 sm:px-2 text-[9.5px] sm:text-[10px] font-mono uppercase tracking-[0.12em] sm:tracking-widest leading-snug ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                <span className="min-w-0">{en ? 'Ciliwung 3D Flood Explorer (UP1 Puncak → Java Sea)' : 'Visualisasi 3D DAS Ciliwung (UP1 Puncak → Laut Jawa)'}</span>
-                <span className="shrink-0 whitespace-nowrap">{state?.runId ? `run ${state.runId.slice(0, 8)}` : 'idle'}</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                <div className="min-w-0">
+                  <span className={`block text-[10px] font-mono uppercase tracking-[0.14em] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                    {mapLayer === 'map3d'
+                      ? en
+                        ? 'Ciliwung 3D Flood Explorer (UP1 Puncak → Java Sea)'
+                        : 'Visualisasi 3D DAS Ciliwung (UP1 Puncak → Laut Jawa)'
+                      : en
+                        ? 'Ciliwung 2D Corridor Map (9 Monitoring Nodes)'
+                        : 'Peta Koridor 2D DAS Ciliwung (9 Stasiun Pantau)'}
+                  </span>
+                  <span className={`text-[10px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {selectedMode === 'legacy'
+                      ? (en ? selectedProfile.labelEn : selectedProfile.labelId)
+                      : en
+                        ? 'Synthetic Replay'
+                        : 'Replay Sintetis'}{' '}
+                    · {state?.runId ? `run ${state.runId.slice(0, 8)}` : (en ? 'idle' : 'standby')}
+                  </span>
+                </div>
+
+                {/* Compact Inline 3D | 2D Switcher */}
+                <div
+                  role="group"
+                  aria-label={en ? 'Map projection' : 'Tampilan peta'}
+                  className={`inline-flex p-0.5 rounded-lg border text-[11px] font-mono font-bold shrink-0 ${
+                    isDark ? 'border-white/10 bg-black/40' : 'border-slate-200 bg-slate-100'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    aria-pressed={mapLayer === 'map3d'}
+                    onClick={() => setMapLayer('map3d')}
+                    className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                      mapLayer === 'map3d'
+                        ? 'bg-[#3B82F6] text-black'
+                        : isDark
+                          ? 'text-slate-400 hover:text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {en ? '3D View' : 'Peta 3D'}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={mapLayer === 'map2d'}
+                    onClick={() => setMapLayer('map2d')}
+                    className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                      mapLayer === 'map2d'
+                        ? 'bg-[#3B82F6] text-black'
+                        : isDark
+                          ? 'text-slate-400 hover:text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {en ? '2D Map' : 'Peta 2D'}
+                  </button>
+                </div>
               </div>
-              <div
-                className={`relative flex-1 w-full overflow-hidden rounded-xl border ${
-                  isDark ? 'border-white/10 bg-[#101916]' : 'border-slate-200 bg-[#b9d2d5]'
-                }`}
-              >
-                <CiliwungOfficial3DView
-                  mode="simulation"
-                  nodes={state?.threeDNodes ?? []}
-                  selectedNodeId={graphNodeId}
-                  onSelectNode={setGraphNodeId}
-                  isLive={isRunning || state?.status === 'completed'}
-                  simTimeSeconds={state?.simTimeSeconds ?? 0}
-                  theme={theme}
-                  language={language}
-                  heightClassName="h-[clamp(420px,64vh,680px)] lg:h-full lg:min-h-[560px]"
-                />
-              </div>
+
+              {mapLayer === 'map3d' ? (
+                <div
+                  className={`relative flex-1 w-full overflow-hidden rounded-xl border ${
+                    isDark ? 'border-white/10 bg-[#101916]' : 'border-slate-200 bg-[#b9d2d5]'
+                  }`}
+                >
+                  <CiliwungOfficial3DView
+                    mode="simulation"
+                    nodes={state?.threeDNodes ?? []}
+                    selectedNodeId={graphNodeId}
+                    onSelectNode={setGraphNodeId}
+                    isLive={isRunning || state?.status === 'completed'}
+                    simTimeSeconds={state?.simTimeSeconds ?? 0}
+                    theme={theme}
+                    language={language}
+                    heightClassName="h-[clamp(400px,56vh,560px)] lg:h-full lg:min-h-[510px]"
+                  />
+                </div>
+              ) : (
+                <div className="relative flex-1 min-h-[420px] lg:min-h-[510px] flex flex-col">
+                  <Map2D
+                    compact
+                    fillHeight
+                    simulation
+                    extraNodes={SIMULATION_UPSTREAM}
+                    fallbackLevel={null}
+                    config={{}}
+                    snapshot={map2dSnapshot}
+                    language={language}
+                  />
+                </div>
+              )}
             </section>
           )}
 
-          {activeView === 'graph' && (
-            <section className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-5 lg:p-6 flex flex-1 flex-col justify-between`}>
+          {/* TAB 2: FORECAST GRAPH (+30M) */}
+          {simTab === 'graph' && (
+            <section className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-4 sm:p-5 lg:p-6 flex flex-1 flex-col justify-between`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold text-blue-400">
-                    {en ? 'WATER LEVEL FORECAST' : 'PREDIKSI TINGGI AIR'}
+                  <p className="text-[10px] font-mono uppercase tracking-[0.2em] font-bold text-blue-400">
+                    {en ? 'WATER LEVEL FORECAST (+30 MIN)' : 'PREDIKSI TINGGI AIR (+30 MENIT)'}
                   </p>
                   <h2 className={`mt-1 text-xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                    {currentNode ? currentNode.name : en ? 'Waiting for node' : 'Menunggu node'}
+                    {currentNode ? `${currentNode.id} · ${currentNode.name}` : en ? 'Waiting for node' : 'Menunggu node'}
                   </h2>
                   <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                     {isReplay
@@ -926,35 +1111,42 @@ export default function CiliwungSimulationPage({
                         ? 'Synthetic replay forecast'
                         : 'Prediksi replay sintetis'
                       : selectedMode === 'legacy'
-                        ? `${en ? 'Routing simulation' : 'Simulasi propagasi'} · ${selectedProfile.label}`
+                        ? `${en ? 'Routing simulation' : 'Simulasi propagasi'} · ${en ? selectedProfile.labelEn : selectedProfile.labelId}`
                         : en
                           ? 'Synthetic replay'
                           : 'Replay sintetis'}
                   </p>
                 </div>
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${
-                    isDark ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'
-                  }`}
-                >
-                  {prediction.length && Math.abs(prediction[prediction.length - 1].afterSeconds - 1800) < 0.001
-                    ? `${en ? 'Estimate' : 'Estimasi'} +30 ${en ? 'min' : 'menit'} · ${prediction[
-                        prediction.length - 1
-                      ].tmaCm.toFixed(1)} cm`
-                    : 'cm'}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-lg px-3 py-1.5 text-xs font-mono font-bold tabular-nums ${
+                      isDark ? 'bg-white/[0.04] border border-white/10 text-slate-200' : 'bg-slate-100 border border-slate-200 text-slate-800'
+                    }`}
+                  >
+                    {en ? 'Now' : 'Saat ini'}: {currentLevel !== null ? `${currentLevel.toFixed(1)} cm` : '—'}
+                  </span>
+                  <span
+                    className={`rounded-lg px-3 py-1.5 text-xs font-mono font-bold tabular-nums ${
+                      isDark ? 'bg-blue-500/15 border border-blue-500/30 text-blue-300' : 'bg-blue-50 border border-blue-200 text-blue-700'
+                    }`}
+                  >
+                    {prediction.length && Math.abs(prediction[prediction.length - 1].afterSeconds - 1800) < 0.001
+                      ? `${en ? 'Est.' : 'Estimasi'} +30m · ${prediction[prediction.length - 1].tmaCm.toFixed(1)} cm`
+                      : '+30m · — cm'}
+                  </span>
+                </div>
               </div>
 
               {graphLevels.length ? (
                 <div
-                  className="mt-7 flex flex-1 flex-col justify-center"
+                  className="mt-5 flex flex-1 flex-col justify-center"
                   role="img"
                   aria-label={`${en ? 'Water level forecast' : 'Grafik prediksi tinggi air'} ${currentNode?.name ?? ''}`}
                 >
                   <div className="flex gap-3">
                     <div
                       aria-hidden="true"
-                      className="flex h-56 sm:h-72 flex-col justify-between py-2 text-right text-xs text-slate-500"
+                      className="flex h-56 sm:h-72 flex-col justify-between py-2 text-right text-xs font-mono text-slate-500"
                     >
                       {[4, 3, 2, 1, 0].map((step) => (
                         <span key={step}>{(graphMax * step) / 4}</span>
@@ -1020,7 +1212,7 @@ export default function CiliwungSimulationPage({
                       )}
                     </svg>
                   </div>
-                  <div className="ml-9 flex justify-between gap-2 text-xs text-slate-500">
+                  <div className="ml-9 flex justify-between gap-2 text-xs font-mono text-slate-500">
                     <span>−30 {en ? 'min' : 'menit'}</span>
                     <span>
                       {en ? 'Now' : 'Saat ini'} · {formatTime(currentTime)}
@@ -1040,73 +1232,96 @@ export default function CiliwungSimulationPage({
               ) : (
                 <div
                   role="status"
-                  className={`mt-6 flex min-h-56 items-center justify-center rounded-xl border text-center text-sm ${
-                    isDark ? 'border-white/10 text-slate-400' : 'border-slate-200 text-slate-500'
+                  className={`mt-5 flex flex-1 min-h-[280px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-6 text-center text-sm ${
+                    isDark ? 'border-white/10 bg-black/20 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'
                   }`}
                 >
-                  {en ? 'Start the simulation to see the graph.' : 'Mulai simulasi untuk melihat grafik.'}
+                  <span>{en ? 'Start the simulation to see the +30m forecast graph.' : 'Mulai simulasi untuk melihat grafik prediksi +30 menit.'}</span>
+                  <button
+                    type="button"
+                    onClick={handleStart}
+                    disabled={busy || isRunning || (selectedMode === 'rain_replay' && !selectedEpisodeId)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#3B82F6] hover:bg-blue-400 text-black text-xs font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>{en ? 'Start Simulation Now' : 'Mulai Simulasi Sekarang'}</span>
+                  </button>
                 </div>
               )}
 
-              {currentLevel !== null && prediction.length === 0 && (
-                <p role="status" className="mt-3 text-xs text-amber-500">
-                  {isReplay
-                    ? !isRunning
-                      ? en
-                        ? 'Replay is not running; forecast unavailable.'
-                        : 'Replay berhenti; prediksi tidak tersedia.'
-                      : selectedForecast?.reason
-                        ? `${en ? 'Forecast unavailable' : 'Prediksi tidak tersedia'}: ${selectedForecast.reason}`
-                        : en
-                          ? 'Waiting for the current forecast…'
-                          : 'Menunggu prediksi untuk kondisi saat ini…'
-                    : !isRunning
-                      ? en
-                        ? 'Simulation is not running.'
-                        : 'Simulasi tidak berjalan.'
-                      : projectionError
+              <div className="mt-3 flex flex-col gap-1">
+                {currentLevel !== null && prediction.length === 0 && (
+                  <p role="status" className="text-xs text-amber-500">
+                    {isReplay
+                      ? !isRunning
                         ? en
-                          ? 'Scenario projection unavailable.'
-                          : 'Proyeksi skenario tidak tersedia.'
-                        : en
-                          ? 'Calculating scenario projection…'
-                          : 'Menghitung proyeksi skenario…'}
-                </p>
-              )}
-              {!isReplay && prediction.length > 0 && (
-                <p className="mt-3 text-xs text-slate-500">
+                          ? 'Replay is not running; forecast unavailable.'
+                          : 'Replay berhenti; prediksi tidak tersedia.'
+                        : selectedForecast?.reason
+                          ? `${en ? 'Forecast unavailable' : 'Prediksi tidak tersedia'}: ${selectedForecast.reason}`
+                          : en
+                            ? 'Waiting for the current forecast…'
+                            : 'Menunggu prediksi untuk kondisi saat ini…'
+                      : !isRunning
+                        ? en
+                          ? 'Simulation is not running.'
+                          : 'Simulasi tidak berjalan.'
+                        : projectionError
+                          ? en
+                            ? 'Scenario projection unavailable.'
+                            : 'Proyeksi skenario tidak tersedia.'
+                          : en
+                            ? 'Calculating scenario projection…'
+                            : 'Menghitung proyeksi skenario…'}
+                  </p>
+                )}
+                {!isReplay && prediction.length > 0 && (
+                  <p className="text-xs text-slate-500">
+                    {en
+                      ? 'Projection from the current simulation hydrological routing.'
+                      : 'Proyeksi dari simulasi propagasi hidrologi saat ini.'}
+                    {projectionEndsEarly &&
+                      ` ${en ? 'Scenario ends at' : 'Skenario selesai pada'} +${formatTime(
+                        prediction[prediction.length - 1].afterSeconds
+                      )} ${en ? '(mm:ss); no later projection.' : '(mm:ss); tidak ada proyeksi setelahnya.'}`}
+                  </p>
+                )}
+                <p className="text-[11px] text-slate-500">
                   {en
-                    ? 'Projection from the current simulation hydrological routing.'
-                    : 'Proyeksi dari simulasi propagasi hidrologi saat ini.'}
-                  {projectionEndsEarly &&
-                    ` ${en ? 'Scenario ends at' : 'Skenario selesai pada'} +${formatTime(
-                      prediction[prediction.length - 1].afterSeconds
-                    )} ${en ? '(mm:ss); no later projection.' : '(mm:ss); tidak ada proyeksi setelahnya.'}`}
+                    ? 'Synthetic demonstration for capstone hydrological routing visualization.'
+                    : 'Demonstrasi sintetis untuk visualisasi propagasi banjir DAS Ciliwung.'}
                 </p>
-              )}
-              <p className="mt-3 text-xs text-slate-500">
-                {en
-                  ? 'Synthetic demonstration for capstone hydrological routing visualization.'
-                  : 'Demonstrasi sintetis untuk visualisasi propagasi banjir DAS Ciliwung.'}
-              </p>
+              </div>
             </section>
           )}
         </div>
 
+        {/* COMPACT 9-NODE WATER LEVEL SELECTOR SIDEBAR */}
         <aside
           data-testid="simulation-node-levels"
-          className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-5 flex flex-col gap-3`}
+          className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-4 flex flex-col gap-2.5`}
         >
-          <div>
-            <h2 className="text-lg font-bold">{en ? 'Water levels' : 'Tinggi Muka Air'}</h2>
-            <p className="text-xs opacity-70 mt-1">
-              {en ? 'Current simulation state · 9 watershed nodes' : 'Kondisi simulasi saat ini · 9 node DAS'}
-            </p>
-            <p className="text-xs text-blue-400 mt-2">
-              {en ? 'Select a node to focus 3D or view forecast' : 'Pilih node untuk fokus 3D atau melihat grafik'}
-            </p>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                {en ? 'Water Levels (9 Nodes)' : 'Tinggi Muka Air (9 Node)'}
+              </h2>
+              <p className="text-[11px] text-blue-400 mt-0.5">
+                {simTab === 'map'
+                  ? en
+                    ? 'Click a node to focus camera'
+                    : 'Klik node untuk fokus peta'
+                  : en
+                    ? 'Click a node to switch forecast'
+                    : 'Klik node untuk ganti grafik'}
+              </p>
+            </div>
+            <span className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-md ${isDark ? 'bg-white/5 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
+              UP1 → N5
+            </span>
           </div>
-          <div className="grid grid-cols-1 gap-1.5 content-start">
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5 content-start">
             {(state?.cupNodes ?? []).length ? (
               (state?.cupNodes ?? []).map((node) => (
                 <button
@@ -1115,29 +1330,39 @@ export default function CiliwungSimulationPage({
                   aria-pressed={graphNodeId === node.id}
                   onClick={() => handleSelectNode(node.id)}
                   data-testid={`simulation-node-${node.id}`}
-                  className={`w-full rounded-xl border px-3 py-2 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
+                  className={`w-full rounded-xl border px-3 py-1.5 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
                     graphNodeId === node.id
                       ? isDark
                         ? 'border-blue-400 bg-blue-500/20 ring-1 ring-blue-400/50'
                         : 'border-blue-500 bg-blue-50 ring-1 ring-blue-400'
                       : isDark
-                        ? 'bg-white/5 border-white/10 hover:border-blue-400/50'
+                        ? 'bg-white/[0.03] border-white/10 hover:border-blue-400/50'
                         : 'bg-slate-50 border-slate-200 hover:border-blue-400/50'
                   }`}
                 >
                   <span className="min-w-0">
-                    <strong className="block text-xs">
+                    <strong className={`block text-xs truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>
                       {node.id} · {node.name}
                     </strong>
-                    <span className="text-xs opacity-70">{statusLabel(node.status)}</span>
+                    <span
+                      className={`text-[10px] font-mono font-semibold ${
+                        node.status === 'BANJIR_JAKARTA'
+                          ? 'text-rose-400'
+                          : node.status === 'SIAGA'
+                            ? 'text-amber-400'
+                            : 'text-emerald-400/90'
+                      }`}
+                    >
+                      {statusLabel(node.status, en)}
+                    </span>
                   </span>
-                  <strong className="text-sm whitespace-nowrap">
+                  <strong className={`text-xs sm:text-sm font-mono tabular-nums whitespace-nowrap ${isDark ? 'text-white' : 'text-slate-900'}`}>
                     {Number.isFinite(node.tmaCm) ? node.tmaCm.toFixed(1) : '—'} cm
                   </strong>
                 </button>
               ))
             ) : (
-              <p className="text-sm opacity-70">{en ? 'Waiting for simulation data' : 'Menunggu data simulasi'}</p>
+              <p className="text-xs opacity-70 py-4 text-center">{en ? 'Waiting for simulation data' : 'Menunggu data simulasi'}</p>
             )}
           </div>
         </aside>

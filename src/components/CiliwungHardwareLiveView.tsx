@@ -294,13 +294,21 @@ export function Map2D({
       console.error('[ciliwung-map]', error);
     }
 
+    let resizeRafId = 0;
     const resizeObserver =
       typeof ResizeObserver !== 'undefined' && containerRef.current
-        ? new ResizeObserver(() => map.invalidateSize())
+        ? new ResizeObserver(() => {
+            if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
+            resizeRafId = window.requestAnimationFrame(() => {
+              resizeRafId = 0;
+              if (mapRef.current) mapRef.current.invalidateSize();
+            });
+          })
         : null;
     if (resizeObserver && containerRef.current) resizeObserver.observe(containerRef.current);
 
     return () => {
+      if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
       resizeObserver?.disconnect();
       map.remove();
       mapRef.current = null;
@@ -455,7 +463,13 @@ export function Map2D({
               : en ? 'waiting for data' : 'menunggu data'
           }${
             node && node.valueType !== 'reset'
-              ? ` · ${node.tmaCm.toFixed(1)} cm · ${node.status} · ${isLive ? 'LIVE' : 'STALE'} · ${formatReadingTime(
+              ? ` · ${node.tmaCm.toFixed(1)} cm · ${
+                  node.status === 'BANJIR_JAKARTA'
+                    ? en ? 'FLOOD' : 'BANJIR'
+                    : node.status === 'SIAGA'
+                      ? en ? 'ALERT' : 'SIAGA'
+                      : en ? 'SAFE' : 'AMAN'
+                } · ${isLive ? 'LIVE' : en ? 'STALE' : 'DATA LAMA'} · ${formatReadingTime(
                   snapshot?.hardware?.measuredAt ?? snapshot?.timestampUtc
                 )}`
               : ''
@@ -541,7 +555,7 @@ export function Map2D({
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs opacity-75">
           <span>
             {simulation ? (en ? 'Simulation data' : 'Data simulasi') : 'N1 Pos Depok'}: {level == null ? '—' : `${level.toFixed(1)} cm`} ·{' '}
-            {isLive ? (simulation ? (en ? 'ACTIVE' : 'AKTIF') : 'LIVE') : simulation ? (en ? 'INACTIVE' : 'TIDAK AKTIF') : 'STALE'}
+            {isLive ? (simulation ? (en ? 'ACTIVE' : 'AKTIF') : 'LIVE') : simulation ? (en ? 'INACTIVE' : 'TIDAK AKTIF') : (en ? 'STALE' : 'DATA TERAKHIR')}
           </span>
           <span>
             {en
@@ -852,10 +866,10 @@ export function GraphView({
           {limits && (
             <>
               <span>
-                <span className="text-amber-500">┄┄</span> Siaga {limits.siaga} cm
+                <span className="text-amber-500">┄┄</span> {en ? 'Alert' : 'Siaga'} {limits.siaga} cm
               </span>
               <span>
-                <span className="text-rose-500">┄┄</span> Bahaya {limits.bahaya} cm
+                <span className="text-rose-500">┄┄</span> {en ? 'Danger' : 'Bahaya'} {limits.bahaya} cm
               </span>
             </>
           )}
@@ -1169,7 +1183,7 @@ export function GraphView({
               range === '30m' ? 'bg-blue-500 font-bold text-white' : 'bg-slate-500/10'
             }`}
           >
-            30 min
+            {en ? '30 min' : '30 mnt'}
           </button>
           {loadDay && !simulated && (
             <button
@@ -1678,7 +1692,7 @@ export default function CiliwungHardwareLiveView({
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="Tampilan live hardware">
+      <div className="mt-4 flex flex-wrap items-center gap-2" role="tablist" aria-label={en ? 'Live hardware view' : 'Tampilan live hardware'}>
         <button
           type="button"
           data-testid="hardware-view-map2d"
@@ -1802,7 +1816,7 @@ export default function CiliwungHardwareLiveView({
                       <span className="mt-1 block text-[11px] opacity-70">
                         {node.id === 'N1'
                           ? snapshot?.hardware?.valueType === 'simulation'
-                            ? 'Simulasi'
+                            ? (en ? 'Simulation' : 'Simulasi')
                             : 'ESP32'
                           : en
                             ? 'Visual preset · not sensor'

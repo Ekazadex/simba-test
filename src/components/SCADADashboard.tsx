@@ -43,7 +43,10 @@ import {
   CheckCircle2,
   RotateCcw,
   ShieldCheck,
-  Zap
+  Zap,
+  Map as MapIcon,
+  LineChart as LineChartIcon,
+  CloudSun
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -206,6 +209,7 @@ export default function SCADADashboard({
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
   const [weatherMode, setWeatherMode] = useState<'live' | 'sensor_sim'>('live');
+  const [dashboardSubTab, setDashboardSubTab] = useState<'map' | 'chart' | 'weather'>('map');
   const [internalSoundEnabled, setInternalSoundEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('scada_sound_enabled') !== 'false';
@@ -562,7 +566,7 @@ export default function SCADADashboard({
   let alertStatus: 'Normal' | 'Siaga' | 'Bahaya' | 'Offline' = 'Normal';
   let alertBg = 'bg-[#3B82F6]/10 border border-[#3B82F6]/25 text-[#3B82F6]';
   let alertLed = 'bg-[#3B82F6]';
-  let alertLabel = language === 'en' ? 'SYSTEM OPTIMAL / NORMAL' : 'SYSTEM OPTIMAL / AMAN';
+  let alertLabel = language === 'en' ? 'SYSTEM OPTIMAL / NORMAL' : 'SISTEM OPTIMAL / AMAN';
 
   if (isDeviceOffline) {
     alertStatus = 'Offline';
@@ -582,6 +586,15 @@ export default function SCADADashboard({
     alertLed = 'bg-amber-500 scada-led-blink';
     alertLabel = language === 'en' ? 'WARNING / ALERT' : 'SIAGA / WASPADA';
   }
+
+  const localizedAlertStatus =
+    alertStatus === 'Bahaya'
+      ? (language === 'en' ? 'DANGER' : 'BAHAYA')
+      : alertStatus === 'Siaga'
+        ? (language === 'en' ? 'ALERT' : 'SIAGA')
+        : alertStatus === 'Offline'
+          ? 'OFFLINE'
+          : (language === 'en' ? 'SAFE' : 'AMAN');
 
   // Sensor-linked weather simulation profile (for indoor hardware demos synced to live ESP32 elevation)
   const sensorLinkedWeather = useMemo(() => {
@@ -759,20 +772,30 @@ export default function SCADADashboard({
 
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
       if (alertStatus === 'Bahaya' && prefPushBahaya) {
-        new Notification("⚠️ BAHAYA: ELEVASI AIR KRITIS!", {
-          body: `Tinggi air mencapai ${currentLevel} cm (melebihi ambang bahaya ${thresholdBahaya} cm). Segera lakukan evakuasi!`,
-          icon: "/favicon.ico",
-          tag: "scada-alert-bahaya"
-        });
+        new Notification(
+          language === 'en' ? '⚠️ DANGER: CRITICAL WATER ELEVATION!' : '⚠️ BAHAYA: ELEVASI AIR KRITIS!',
+          {
+            body: language === 'en'
+              ? `Water level reached ${currentLevel} cm (exceeding danger threshold ${thresholdBahaya} cm). Evacuate immediately!`
+              : `Tinggi air mencapai ${currentLevel} cm (melebihi ambang bahaya ${thresholdBahaya} cm). Segera lakukan evakuasi!`,
+            icon: '/favicon.ico',
+            tag: 'scada-alert-bahaya',
+          }
+        );
       } else if (alertStatus === 'Siaga' && prefPushSiaga && prevStatus === 'Normal') {
-        new Notification("⚠️ WASPADA: STATUS SIAGA!", {
-          body: `Tinggi air mencapai ${currentLevel} cm (melebihi ambang siaga ${thresholdSiaga} cm). Pantau secara berkala.`,
-          icon: "/favicon.ico",
-          tag: "scada-alert-siaga"
-        });
+        new Notification(
+          language === 'en' ? '⚠️ WARNING: ALERT STATUS!' : '⚠️ WASPADA: STATUS SIAGA!',
+          {
+            body: language === 'en'
+              ? `Water level reached ${currentLevel} cm (exceeding alert threshold ${thresholdSiaga} cm). Monitor continuously.`
+              : `Tinggi air mencapai ${currentLevel} cm (melebihi ambang siaga ${thresholdSiaga} cm). Pantau secara berkala.`,
+            icon: '/favicon.ico',
+            tag: 'scada-alert-siaga',
+          }
+        );
       }
     }
-  }, [alertStatus, prefPushSiaga, prefPushBahaya, currentLevel, thresholdSiaga, thresholdBahaya]);
+  }, [alertStatus, prefPushSiaga, prefPushBahaya, currentLevel, thresholdSiaga, thresholdBahaya, language]);
 
   const [isExportingCSV, setIsExportingCSV] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -823,11 +846,15 @@ export default function SCADADashboard({
         return;
       }
 
-      const headers = ['Timestamp', 'Waktu Lokal', 'Elevasi Air (cm)', 'Jarak Sensor JSN-SR04T (cm)', 'Deteksi Tetesan Hujan (Capacitive V2.0)', 'Sumber Data', 'Suhu BMKG (C)', 'Kelembapan BMKG (%)'];
+      const headers = language === 'en'
+        ? ['Timestamp', 'Local Time', 'Water Elevation (cm)', 'JSN-SR04T Sensor Distance (cm)', 'Raindrop Detection (Capacitive V2.0)', 'Data Source', 'BMKG Temp (C)', 'BMKG Humidity (%)']
+        : ['Timestamp', 'Waktu Lokal', 'Elevasi Air (cm)', 'Jarak Sensor JSN-SR04T (cm)', 'Deteksi Tetesan Hujan (Capacitive V2.0)', 'Sumber Data', 'Suhu BMKG (C)', 'Kelembapan BMKG (%)'];
       const rows = exportList.map(r => {
         const dateStr = new Date(r.timestamp).toISOString();
-        const localTimeStr = new Date(r.timestamp).toLocaleString('id-ID');
-        const rainLabel = r.local_rain === 0 ? 'Kering / Cerah' : r.local_rain === 1 ? 'Tetesan Hujan' : r.local_rain === 2 ? 'Basah Presipitasi' : 'Hujan Lebat';
+        const localTimeStr = new Date(r.timestamp).toLocaleString(language === 'en' ? 'en-US' : 'id-ID');
+        const rainLabel = language === 'en'
+          ? (r.local_rain === 0 ? 'Dry / Clear' : r.local_rain === 1 ? 'Raindrop Detected' : r.local_rain === 2 ? 'Wet Precipitation' : 'Heavy Rain')
+          : (r.local_rain === 0 ? 'Kering / Cerah' : r.local_rain === 1 ? 'Tetesan Hujan' : r.local_rain === 2 ? 'Basah Presipitasi' : 'Hujan Lebat');
         return [
           dateStr,
           `"${localTimeStr}"`,
@@ -1000,6 +1027,14 @@ export default function SCADADashboard({
     });
   }, [readingsList, rawBatch, hasBatchData, latestReading, config?.auto_simulation, thresholdSiaga, thresholdBahaya, refHeight]);
 
+  const localizedLstmStatus = lstmForecast
+    ? lstmForecast.status === 'Bahaya'
+      ? (language === 'en' ? 'DANGER' : 'BAHAYA')
+      : lstmForecast.status === 'Siaga'
+        ? (language === 'en' ? 'ALERT' : 'SIAGA')
+        : (language === 'en' ? 'SAFE' : 'AMAN')
+    : 'STANDBY';
+
   // Unified Historical + Trained LSTM Forecast Series (Single Source of Truth in Elevation Mode)
   const activeForecast = lstmForecast
     ? {
@@ -1081,12 +1116,12 @@ export default function SCADADashboard({
   const isHardwareLive = Boolean(latestReading?.source?.includes('Hardware') && !isDeviceOffline);
 
   return (
-    <div id="scada-dashboard-root" className="grid grid-cols-1 lg:grid-cols-12 gap-6 pb-12">
+    <div id="scada-dashboard-root" className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 pb-6">
 
       {/* ROW 1: COMPACT TELEMETRY STATUS STRIP + SINGLE SIMULATION CTA */}
       <div
         id="scada-hardware-pause-banner"
-        className={`col-span-12 min-w-0 overflow-hidden px-4 py-3.5 sm:px-5 rounded-2xl border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 ${
+        className={`col-span-12 min-w-0 overflow-hidden px-4 py-3 sm:px-5 rounded-2xl border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 ${
           isHardwareLive
             ? isDark
               ? 'bg-emerald-950/20 border-emerald-500/25 text-emerald-300'
@@ -1164,7 +1199,99 @@ export default function SCADADashboard({
         </div>
       </div>
 
-      {/* ROW 2: SPATIAL HERO — 2D/3D CILIWUNG CORRIDOR MAP (8 COLS) + LIVE WATER ELEVATION GAUGE (4 COLS) */}
+      {/* DASHBOARD SUB-TAB BAR (OPTION A: 3 CLEAN VIEWPORT-FITTED TABS) */}
+      <div
+        id="dashboard-subtabs"
+        role="tablist"
+        aria-label={language === 'en' ? 'Dashboard sections' : 'Sub-menu Dashboard'}
+        className={`col-span-12 min-w-0 grid grid-cols-3 gap-1.5 sm:gap-2 p-1.5 rounded-2xl border ${
+          isDark ? 'bg-[#0D0D0F] border-white/10' : 'bg-white border-slate-200 shadow-sm'
+        }`}
+      >
+        {([
+          {
+            id: 'map' as const,
+            icon: MapIcon,
+            label: language === 'en' ? 'Map & Water Level' : 'Peta & Elevasi Air',
+            shortLabel: language === 'en' ? 'Map & TMA' : 'Peta & Air',
+            badge: isDeviceOffline ? '-- cm' : `${currentLevel.toFixed(1)} cm`,
+            badgeTone:
+              alertStatus === 'Bahaya'
+                ? 'text-rose-400'
+                : alertStatus === 'Siaga'
+                  ? 'text-amber-400'
+                  : 'text-emerald-400',
+          },
+          {
+            id: 'chart' as const,
+            icon: LineChartIcon,
+            label: language === 'en' ? 'Charts & LSTM Forecast' : 'Grafik & Prediksi LSTM',
+            shortLabel: language === 'en' ? 'LSTM Chart' : 'Grafik LSTM',
+            badge: lstmForecast
+              ? `${language === 'en' ? '6h' : '6J'}: ${lstmForecast.prediction_6h.toFixed(1)} cm`
+              : 'LSTM',
+            badgeTone:
+              lstmForecast?.status === 'Bahaya'
+                ? 'text-rose-400'
+                : lstmForecast?.status === 'Siaga'
+                  ? 'text-amber-400'
+                  : 'text-violet-400',
+          },
+          {
+            id: 'weather' as const,
+            icon: CloudSun,
+            label: language === 'en' ? 'BMKG Weather' : 'Cuaca BMKG',
+            shortLabel: language === 'en' ? 'Weather' : 'Cuaca',
+            badge: activeWeather
+              ? `${activeWeather.temperature_c}°C`
+              : 'BMKG',
+            badgeTone: isSensorSimWeather ? 'text-amber-400' : 'text-sky-400',
+          },
+        ]).map((tab) => {
+          const Icon = tab.icon;
+          const isActive = dashboardSubTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              id={`btn-subtab-${tab.id}`}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setDashboardSubTab(tab.id)}
+              className={`min-w-0 flex items-center justify-center sm:justify-between gap-1.5 sm:gap-2.5 px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-left transition-all cursor-pointer ${
+                isActive
+                  ? 'bg-[#3B82F6] text-black shadow-sm'
+                  : isDark
+                    ? 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+              }`}
+            >
+              <span className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                <Icon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${isActive ? 'text-black' : ''}`} />
+                <span className="hidden sm:inline text-xs font-bold truncate">{tab.label}</span>
+                <span className="sm:hidden text-[11px] font-bold truncate">{tab.shortLabel}</span>
+              </span>
+              <span
+                className={`hidden md:inline-flex items-center gap-1 font-mono text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-md shrink-0 whitespace-nowrap ${
+                  isActive
+                    ? 'bg-black/15 text-black'
+                    : isDark
+                      ? `bg-white/[0.04] ${tab.badgeTone}`
+                      : `bg-slate-100 ${tab.badgeTone}`
+                }`}
+              >
+                {tab.id === 'weather' && isSensorSimWeather && (
+                  <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-black/70' : 'bg-amber-400'}`} />
+                )}
+                {tab.badge}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* SUB-TAB 1: SPATIAL HERO — 2D/3D CILIWUNG CORRIDOR MAP (8 COLS) + LIVE WATER ELEVATION GAUGE (4 COLS) */}
+      {dashboardSubTab === 'map' && (
       <div id="measurement-grid" className="col-span-12 min-w-0 grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-stretch">
 
         {/* Left 8 Cols: Interactive 2D/3D Corridor Map (Spatial Hero Above the Fold) */}
@@ -1374,11 +1501,14 @@ export default function SCADADashboard({
           </div>
         </div>
       </div>
+      )}
 
-      {/* ROW 3: OFFICIAL BMKG PUBLIC API WEATHER FORECAST (WITH SENSOR-SYNCED DEMO MODE) */}
+      {/* SUB-TAB 3: OFFICIAL BMKG PUBLIC API WEATHER FORECAST (WITH SENSOR-SYNCED DEMO MODE) + HYDROLOGICAL CORRELATION */}
+      {dashboardSubTab === 'weather' && (
+      <div className="col-span-12 min-w-0 flex flex-col gap-4 lg:gap-5">
       <div
         id="bmkg-gauge"
-        className={`col-span-12 min-w-0 ${themeCard} ${
+        className={`w-full min-w-0 ${themeCard} ${
           isSensorSimWeather ? 'border-amber-500/30' : ''
         } rounded-2xl p-4 sm:p-5 lg:p-6 relative overflow-hidden transition-colors`}
       >
@@ -1417,8 +1547,8 @@ export default function SCADADashboard({
             <span className={`font-mono text-[10px] tracking-wide leading-snug ${isSensorSimWeather ? 'text-amber-400/90' : 'text-[#3B82F6]'}`}>
               {isSensorSimWeather
                 ? (language === 'en'
-                    ? `Simulated from ESP32 elevation (${alertStatus}) · Not live BMKG feed`
-                    : `Simulasi berbasis elevasi ESP32 (${alertStatus}) · Bukan feed live BMKG`)
+                    ? `Simulated from ESP32 elevation (${localizedAlertStatus}) · Not live BMKG feed`
+                    : `Simulasi berbasis elevasi ESP32 (${localizedAlertStatus}) · Bukan feed live BMKG`)
                 : liveWeather?.source === 'Open-Meteo'
                   ? (language === 'en' ? 'Open-Meteo Live Fallback · BMKG Feed Currently Empty' : 'Fallback Open-Meteo · Feed API BMKG Sedang Kosong')
                   : `${language === 'en' ? 'BMKG Public API' : 'API Publik BMKG'} · ADM4 ${liveWeather?.adm4 || '32.76.06.1002'}`}
@@ -1609,7 +1739,7 @@ export default function SCADADashboard({
                   {activeWeather.forecast_slots.map((slot, idx) => (
                     <div
                       key={`${slot.date_label}-${slot.time_wib}-${idx}`}
-                      title={`${slot.date_label} ${slot.time_wib} WIB · ${slot.condition} · ${slot.wind_speed_kph ?? '—'} km/j (${slot.wind_direction})`}
+                      title={`${slot.date_label} ${slot.time_wib} WIB · ${slot.condition} · ${slot.wind_speed_kph ?? '—'} ${language === 'en' ? 'km/h' : 'km/j'} (${slot.wind_direction})`}
                       className={`flex flex-col items-center justify-between py-2 px-1.5 rounded-lg border text-center ${
                         isDark ? 'bg-white/[0.03] border-white/5' : 'bg-white border-slate-200/70'
                       }`}
@@ -1675,7 +1805,162 @@ export default function SCADADashboard({
         )}
       </div>
 
-      {/* ROW 4: UNIFIED SCADA TELEMETRY CURVE + TRAINED LSTM FORECAST (SINGLE SOURCE OF TRUTH) */}
+      {/* HYDROLOGICAL FUSION SUMMARY (SENSOR ESP32 × CUACA BMKG) */}
+      <div
+        id="hydrology-weather-fusion"
+        className={`w-full min-w-0 ${themeCard} rounded-2xl p-4 sm:p-5 lg:p-6`}
+      >
+        <div className={`flex flex-wrap items-center justify-between gap-2 pb-3.5 mb-4 border-b ${themeBorder}`}>
+          <div className="flex flex-col">
+            <span className={`text-[10px] font-bold uppercase tracking-[0.2em] ${themeTextMuted} font-mono`}>
+              {language === 'en'
+                ? 'Hydrological Fusion · ESP32 Sensor × Kukusan Weather'
+                : 'Korelasi Hidrologi · Sensor ESP32 × Cuaca Kukusan'}
+            </span>
+            <span className={`text-[11px] font-sans mt-0.5 ${themeTextSub}`}>
+              {language === 'en'
+                ? 'Cross-reference between ultrasonic water elevation, local precipitation, and 6-hour LSTM projection.'
+                : 'Ringkasan keterkaitan elevasi ultrasonik lapangan, curah hujan lokal, dan proyeksi LSTM 6 jam.'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setDashboardSubTab('map')}
+              className={`px-3 py-1.5 rounded-lg border text-[10px] font-mono font-bold transition-colors cursor-pointer text-center ${
+                isDark
+                  ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                  : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
+              }`}
+            >
+              {language === 'en' ? 'Open Map & Gauge' : 'Lihat Peta & Elevasi'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDashboardSubTab('chart')}
+              className="px-3 py-1.5 rounded-lg bg-[#3B82F6]/15 hover:bg-[#3B82F6]/25 border border-[#3B82F6]/30 text-[10px] font-mono font-bold text-[#3B82F6] transition-colors cursor-pointer text-center"
+            >
+              {language === 'en' ? 'Open LSTM Chart' : 'Lihat Grafik LSTM'}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Col 1: Ultrasonic Water Elevation vs Threshold */}
+          <div className={`rounded-xl border p-4 flex flex-col justify-between gap-3 ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className={`text-[10px] font-mono uppercase tracking-wider ${themeTextMuted}`}>
+                {language === 'en' ? 'ESP32 Elevation' : 'Elevasi ESP32'}
+              </span>
+              <span className={`text-[10px] font-mono font-bold uppercase ${alertStatus === 'Bahaya' ? 'text-rose-400' : alertStatus === 'Siaga' ? 'text-amber-400' : alertStatus === 'Offline' ? 'text-slate-400' : 'text-emerald-400'}`}>
+                {localizedAlertStatus}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className={`text-3xl font-sans font-light tabular-nums ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                {isDeviceOffline ? '--' : currentLevel.toFixed(1)}
+                <span className="text-xs text-slate-400 ml-1">cm</span>
+              </span>
+              <span className={`text-[10px] font-mono tabular-nums ${themeTextMuted}`}>
+                d = {isDeviceOffline ? '--' : Math.max(0, (config?.reference_height || 300) - currentLevel).toFixed(0)} cm
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <div className={`w-full h-2 rounded-full overflow-hidden ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${
+                    alertStatus === 'Bahaya' ? 'bg-rose-500' : alertStatus === 'Siaga' ? 'bg-amber-400' : 'bg-[#3B82F6]'
+                  }`}
+                  style={{ width: `${Math.min(100, Math.max(4, (currentLevel / Math.max(thresholdBahaya, 100)) * 100))}%` }}
+                />
+              </div>
+              <div className={`flex justify-between text-[9.5px] font-mono tabular-nums ${themeTextMuted}`}>
+                <span>0 cm</span>
+                <span className="text-amber-500">{language === 'en' ? 'Alert' : 'Siaga'} {thresholdSiaga} cm</span>
+                <span className="text-rose-500">{language === 'en' ? 'Danger' : 'Bahaya'} {thresholdBahaya} cm</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Col 2: Atmospheric Rain & Moisture Context */}
+          <div className={`rounded-xl border p-4 flex flex-col justify-between gap-3 ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className={`text-[10px] font-mono uppercase tracking-wider ${themeTextMuted}`}>
+                {language === 'en' ? 'Rainfall Context' : 'Konteks Curah Hujan'}
+              </span>
+              <span className={`text-[10px] font-mono font-bold uppercase ${isSensorSimWeather ? 'text-amber-400' : 'text-sky-400'}`}>
+                {isSensorSimWeather ? (language === 'en' ? 'SENSOR SYNC' : 'SINKRON SENSOR') : 'BMKG LIVE'}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className={`text-2xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                {activeWeather?.precipitation_mm ?? '—'}
+              </span>
+              <span className={`text-[11px] font-medium truncate ${themeTextSub}`}>
+                {activeWeather?.condition || '—'}
+              </span>
+            </div>
+            <div className={`grid grid-cols-2 gap-2 pt-2 border-t ${themeBorder} text-[10px] font-mono tabular-nums`}>
+              <div>
+                <span className={`block ${themeTextMuted}`}>{language === 'en' ? 'Humidity' : 'Kelembapan'}</span>
+                <span className={`font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                  {typeof activeWeather?.humidity_percent === 'number' ? `${activeWeather.humidity_percent}%` : '—'}
+                </span>
+              </div>
+              <div>
+                <span className={`block ${themeTextMuted}`}>{language === 'en' ? 'Cloud Cover' : 'Tutupan Awan'}</span>
+                <span className={`font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                  {typeof activeWeather?.cloud_cover_percent === 'number' ? `${activeWeather.cloud_cover_percent}%` : '—'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Col 3: 6-Hour LSTM Outlook */}
+          <div className={`rounded-xl border p-4 flex flex-col justify-between gap-3 ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className={`text-[10px] font-mono uppercase tracking-wider ${themeTextMuted}`}>
+                {language === 'en' ? 'LSTM 6h Outlook' : 'Proyeksi LSTM 6 Jam'}
+              </span>
+              <span
+                className={`text-[10px] font-mono font-bold uppercase ${
+                  lstmForecast?.status === 'Bahaya'
+                    ? 'text-rose-400'
+                    : lstmForecast?.status === 'Siaga'
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                }`}
+              >
+                {localizedLstmStatus}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {[
+                { label: language === 'en' ? 'T+1h' : 'T+1j', val: lstmForecast?.prediction_1h },
+                { label: language === 'en' ? 'T+3h' : 'T+3j', val: lstmForecast?.prediction_3h },
+                { label: language === 'en' ? 'T+6h' : 'T+6j', val: lstmForecast?.prediction_6h },
+              ].map((item) => (
+                <div key={item.label} className={`rounded-lg py-1.5 px-1 border ${isDark ? 'bg-black/30 border-white/5' : 'bg-white border-slate-200/80'}`}>
+                  <span className={`block text-[9px] font-mono ${themeTextMuted}`}>{item.label}</span>
+                  <span className={`block text-sm font-bold tabular-nums mt-0.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                    {typeof item.val === 'number' ? item.val.toFixed(1) : '--'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className={`text-[10px] font-mono ${themeTextMuted} pt-2 border-t ${themeBorder} truncate`}>
+              {lstmForecast
+                ? `${lstmForecast.modelMeta.sourceFile} · MAE ${lstmForecast.modelMeta.maeCm} cm`
+                : 'model_lstm_banjir.h5 · Standby'}
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+      )}
+
+      {/* SUB-TAB 2: UNIFIED SCADA TELEMETRY CURVE + TRAINED LSTM FORECAST (SINGLE SOURCE OF TRUTH) */}
+      {dashboardSubTab === 'chart' && (
       <div id="scada-charts-forecasts" className="col-span-12 min-w-0">
         <div id="scada-plot-container" className={`${themeCard} rounded-2xl p-4 sm:p-5 lg:p-6 flex flex-col gap-5 sm:gap-6 overflow-hidden`}>
 
@@ -1805,12 +2090,12 @@ export default function SCADADashboard({
                   <span className="font-bold">
                     {isExportingCSV
                       ? (language === 'en' ? 'QUERYING 24H...' : 'MENGAMBIL 24 JAM...')
-                      : (language === 'en' ? 'EXPORT CSV' : 'EXPORT CSV')}
+                      : (language === 'en' ? 'EXPORT CSV' : 'EKSPOR CSV')}
                   </span>
                 </button>
 
                 {exportNotice && (
-                  <div className="absolute right-0 top-full mt-2 w-72 p-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-lg text-[10px] font-sans shadow-xl z-50">
+                  <div className="absolute right-0 top-full mt-2 w-full sm:w-72 p-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-lg text-[10px] font-sans shadow-xl z-50">
                     <div className="flex items-start gap-1.5">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <span>{exportNotice}</span>
@@ -1872,7 +2157,7 @@ export default function SCADADashboard({
                 </div>
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" debounce={50}>
                 <AreaChart data={unifiedChartData} margin={{ top: 10, right: 18, left: -16, bottom: 0 }}>
                   <defs>
                     <linearGradient id="colorLevel" x1="0" y1="0" x2="0" y2="1">
@@ -1996,7 +2281,7 @@ export default function SCADADashboard({
                         strokeDasharray="3 3"
                         strokeWidth={1}
                         label={{
-                          value: 'TIANG/REF',
+                          value: language === 'en' ? 'POLE/REF' : 'TIANG/REF',
                           fill: '#71717A',
                           fontSize: 8,
                           position: 'right',
@@ -2019,15 +2304,17 @@ export default function SCADADashboard({
                 </span>
                 <span className="font-mono text-[10px] text-[#3B82F6] mt-0.5 tabular-nums">
                   {lstmForecast
-                    ? `${lstmForecast.modelMeta.sourceFile} · ${lstmForecast.modelMeta.architecture} · ${lstmForecast.modelMeta.totalParams.toLocaleString('id-ID')} params · MAE ${lstmForecast.modelMeta.maeCm} cm`
-                    : 'model_lstm_banjir.h5 · Menunggu data telemetri sensor...'}
+                    ? `${lstmForecast.modelMeta.sourceFile} · ${lstmForecast.modelMeta.architecture} · ${lstmForecast.modelMeta.totalParams.toLocaleString(language === 'en' ? 'en-US' : 'id-ID')} params · MAE ${lstmForecast.modelMeta.maeCm} cm`
+                    : language === 'en'
+                      ? 'model_lstm_banjir.h5 · Awaiting sensor telemetry...'
+                      : 'model_lstm_banjir.h5 · Menunggu data telemetri sensor...'}
                 </span>
               </div>
 
               {lstmForecast && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] tabular-nums">
                   <span className={themeTextMuted}>
-                    Window {lstmForecast.inputCount}/24 · {lstmForecast.inferenceMs.toFixed(1)} ms
+                    {language === 'en' ? 'Window' : 'Jendela'} {lstmForecast.inputCount}/24 · {lstmForecast.inferenceMs.toFixed(1)} ms
                   </span>
                   <span
                     className={`font-bold uppercase tracking-wider ${
@@ -2039,8 +2326,8 @@ export default function SCADADashboard({
                     }`}
                   >
                     {language === 'en'
-                      ? `6h Outlook: ${lstmForecast.status}`
-                      : `Proyeksi 6J: ${lstmForecast.status === 'Normal' ? 'AMAN' : lstmForecast.status.toUpperCase()}`}
+                      ? `6h Outlook: ${localizedLstmStatus}`
+                      : `Proyeksi 6J: ${localizedLstmStatus}`}
                   </span>
                 </div>
               )}
@@ -2121,6 +2408,7 @@ export default function SCADADashboard({
           </div>
         </div>
       </div>
+      )}
 
     </div>
   );

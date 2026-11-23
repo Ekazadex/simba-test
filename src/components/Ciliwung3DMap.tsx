@@ -841,13 +841,18 @@ export default function Ciliwung3DMap({
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointerup', handlePointerUp);
 
+    let resizeRafId = 0;
     const resizeObserver = new ResizeObserver(() => {
-      if (!container) return;
-      const w = container.clientWidth || 640;
-      const h = container.clientHeight || 420;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
+      resizeRafId = window.requestAnimationFrame(() => {
+        resizeRafId = 0;
+        if (disposed || !container) return;
+        const w = container.clientWidth || 640;
+        const h = container.clientHeight || 420;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      });
     });
     resizeObserver.observe(container);
 
@@ -1026,6 +1031,7 @@ export default function Ciliwung3DMap({
       disposed = true;
       window.clearTimeout(rafId);
       cancelAnimationFrame(rafId);
+      if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointerup', handlePointerUp);

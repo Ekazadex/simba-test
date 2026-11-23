@@ -112,12 +112,19 @@ export default function Ciliwung3DViewer({
         }
 
         if (containerRef.current && typeof ResizeObserver !== 'undefined') {
+          let resizeRafId = 0;
           resizeObserver = new ResizeObserver((entries) => {
             const entry = entries[0];
             if (!entry || !controllerRef.current) return;
             const { width, height } = entry.contentRect;
             if (width > 10 && height > 10) {
-              controllerRef.current.resize(width, height);
+              if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
+              resizeRafId = window.requestAnimationFrame(() => {
+                resizeRafId = 0;
+                if (!cancelled && controllerRef.current) {
+                  controllerRef.current.resize(width, height);
+                }
+              });
             }
           });
           resizeObserver.observe(containerRef.current);
