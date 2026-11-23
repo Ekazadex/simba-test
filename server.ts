@@ -651,12 +651,13 @@ app.get('/api/live-weather', async (req, res) => {
   const isEn = (req.query.lang as string) === 'en' || (req.query.language as string) === 'en';
   const fetchedAtWib = formatWibTime(new Date());
 
-  // Official BMKG ADM4 endpoints for Beji, Kota Depok (Pondok Cina primary, Kukusan & Beji Timur fallback)
+  // Official BMKG ADM4 endpoints for Beji, Kota Depok (Kukusan primary — field test site; Pondok Cina & Beji Timur fallback)
+  res.setHeader('Cache-Control', 'no-store');
   const bmkgUrls = [
-    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1005', // Pondok Cina (publik)
-    'https://api-apps.bmkg.go.id/api/df/v1/forecast/adm?adm4=32.76.06.1005', // Pondok Cina (apps)
-    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1002', // Kukusan
-    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1006', // Beji Timur
+    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1002', // Kukusan (publik)
+    'https://api-apps.bmkg.go.id/api/df/v1/forecast/adm?adm4=32.76.06.1002', // Kukusan (apps)
+    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1005', // Pondok Cina (fallback)
+    'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1006', // Beji Timur (fallback)
   ];
 
   // Step 1: Fetch verbatim data directly from BMKG public API
@@ -712,7 +713,7 @@ app.get('/api/live-weather', async (req, res) => {
 
       const lokasi = bmkgData.lokasi || {};
       const locationParts = [lokasi.desa, lokasi.kecamatan, lokasi.kotkab].filter(Boolean);
-      const locationName = locationParts.length > 0 ? locationParts.join(', ') : 'Pondok Cina, Beji, Kota Depok';
+      const locationName = locationParts.length > 0 ? locationParts.join(', ') : 'Kukusan, Beji, Kota Depok';
 
       // Real upcoming 3-hourly BMKG slots directly from the same API payload
       const upcomingSlots = flatCuaca.slice(closestIdx + 1, closestIdx + 5).map((slot: any) => {
@@ -735,7 +736,7 @@ app.get('/api/live-weather', async (req, res) => {
 
       return res.json({
         source: 'BMKG',
-        adm4: lokasi.adm4 || '32.76.06.1005',
+        adm4: lokasi.adm4 || '32.76.06.1002',
         location_name: locationName,
         temperature_c: currentSlot.t,
         humidity_percent: currentSlot.hu,
@@ -761,7 +762,7 @@ app.get('/api/live-weather', async (req, res) => {
   try {
     console.warn('[API] BMKG endpoints returned empty cuaca[], falling back to Open-Meteo hourly + current.');
     const weatherRes = await fetch(
-      'https://api.open-meteo.com/v1/forecast?latitude=-6.3655&longitude=106.8321&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&hourly=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=2&wind_speed_unit=kmh&timezone=Asia/Jakarta'
+      'https://api.open-meteo.com/v1/forecast?latitude=-6.3662&longitude=106.8186&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&hourly=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=2&wind_speed_unit=kmh&timezone=Asia/Jakarta'
     );
     if (weatherRes.ok) {
       const weatherData = await weatherRes.json();
@@ -834,8 +835,8 @@ app.get('/api/live-weather', async (req, res) => {
 
         return res.json({
           source: 'Open-Meteo',
-          adm4: '32.76.06.1005',
-          location_name: 'Pondok Cina, Beji, Kota Depok',
+          adm4: '32.76.06.1002',
+          location_name: 'Kukusan, Beji, Kota Depok',
           temperature_c: Math.round(cur.temperature_2m),
           humidity_percent: cur.relative_humidity_2m ?? null,
           precipitation_mm: typeof cur.precipitation === 'number' ? `${cur.precipitation} mm` : '—',

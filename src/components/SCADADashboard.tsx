@@ -205,6 +205,7 @@ export default function SCADADashboard({
   } | null>(null);
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
+  const [weatherMode, setWeatherMode] = useState<'live' | 'sensor_sim'>('live');
   const [internalSoundEnabled, setInternalSoundEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('scada_sound_enabled') !== 'false';
@@ -504,11 +505,13 @@ export default function SCADADashboard({
   };
 
   // Fetch genuine live weather directly from official BMKG public API via backend proxy
-  const fetchLiveWeather = async (targetLang: string = language) => {
-    setLoadingWeather(true);
+  const fetchLiveWeather = async (targetLang: string = language, silent: boolean = false) => {
+    if (!silent) {
+      setLoadingWeather(true);
+    }
     setWeatherError(null);
     try {
-      const res = await fetch(apiUrl(`/api/live-weather?lang=${targetLang}`));
+      const res = await fetch(apiUrl(`/api/live-weather?lang=${targetLang}`), { cache: 'no-store' });
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
         throw new Error(
@@ -526,20 +529,28 @@ export default function SCADADashboard({
       setLiveWeather(data);
     } catch (err: any) {
       console.error('[BMKG] Live weather fetch failed:', err);
-      setLiveWeather(null);
-      setWeatherError(
-        err?.message || (targetLang === 'en'
-          ? 'Failed to fetch official BMKG weather data.'
-          : 'Gagal mengambil data cuaca resmi BMKG.')
-      );
+      if (!silent) {
+        setLiveWeather(null);
+        setWeatherError(
+          err?.message || (targetLang === 'en'
+            ? 'Failed to fetch official BMKG weather data.'
+            : 'Gagal mengambil data cuaca resmi BMKG.')
+        );
+      }
     } finally {
-      setLoadingWeather(false);
+      if (!silent) {
+        setLoadingWeather(false);
+      }
     }
   };
 
-  // Run initial weather fetch on dashboard open and refetch when language changes
+  // Run initial weather fetch on dashboard open, refetch when language changes, and auto-sync every 5 minutes
   useEffect(() => {
-    fetchLiveWeather(language);
+    fetchLiveWeather(language, false);
+    const interval = window.setInterval(() => {
+      fetchLiveWeather(language, true);
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(interval);
   }, [language]);
 
   // Determine alert status design tokens
@@ -571,6 +582,158 @@ export default function SCADADashboard({
     alertLed = 'bg-amber-500 scada-led-blink';
     alertLabel = language === 'en' ? 'WARNING / ALERT' : 'SIAGA / WASPADA';
   }
+
+  // Sensor-linked weather simulation profile (for indoor hardware demos synced to live ESP32 elevation)
+  const sensorLinkedWeather = useMemo(() => {
+    const en = language === 'en';
+    const now = new Date();
+    const wibMs = now.getTime() + 7 * 60 * 60 * 1000;
+    const wibDate = new Date(wibMs);
+    const wibHour = wibDate.getUTCHours();
+    const wibMin = wibDate.getUTCMinutes();
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const isNight = wibHour < 6 || wibHour >= 18;
+    const period = isNight ? 'pm' : 'am';
+    const timeLabel = `${pad2(wibHour)}.${pad2(wibMin)} WIB`;
+    const slotHour = `${pad2(wibHour)}.00 WIB`;
+    const monthsId = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    const monthsEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const formatDateShort = (d: Date) =>
+      `${pad2(d.getUTCDate())} ${(en ? monthsEn : monthsId)[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+    const validAt = `${formatDateShort(wibDate)}, ${slotHour}`;
+
+    const level = Math.max(0, Number(currentLevel) || 0);
+    const siaga = Math.max(10, thresholdSiaga);
+    const bahaya = Math.max(siaga + 10, thresholdBahaya);
+
+    const iconBase = 'https://api-apps.bmkg.go.id/storage/icon/cuaca';
+    const iconUrl = (file: string) => `${iconBase}/${encodeURIComponent(file)}`;
+
+    let temperature_c = isNight ? 26 : 29;
+    let humidity_percent = 76;
+    let precipNum = 0.2;
+    let condition = en ? 'Mostly Cloudy' : 'Berawan';
+    let wind_speed_kph = 4.2;
+    let wind_direction = en ? 'East ←' : 'Timur ←';
+    let visibility_km = '> 10 km';
+    let cloud_cover_percent = 72;
+    let weather_icon = iconUrl(`berawan-${period}.svg`);
+
+    type SlotSpec = {
+      tempDelta: number;
+      hu: number;
+      tp: number;
+      condId: string;
+      condEn: string;
+      ws: number;
+      wdId: string;
+      wdEn: string;
+      iconFile: (p: 'am' | 'pm') => string;
+    };
+
+    let slotSpecs: SlotSpec[] = [
+      { tempDelta: 0, hu: 78, tp: 0, condId: 'Berawan', condEn: 'Mostly Cloudy', ws: 4.5, wdId: 'Timur ←', wdEn: 'East ←', iconFile: (p) => `berawan-${p}.svg` },
+      { tempDelta: -1, hu: 80, tp: 0, condId: 'Cerah Berawan', condEn: 'Partly Cloudy', ws: 3.8, wdId: 'Tenggara ↖', wdEn: 'Southeast ↖', iconFile: (p) => `cerah berawan-${p}.svg` },
+      { tempDelta: -1, hu: 82, tp: 0, condId: 'Cerah Berawan', condEn: 'Partly Cloudy', ws: 3.2, wdId: 'Selatan ↑', wdEn: 'South ↑', iconFile: (p) => `cerah berawan-${p}.svg` },
+      { tempDelta: 1, hu: 75, tp: 0, condId: 'Berawan', condEn: 'Mostly Cloudy', ws: 4.8, wdId: 'Timur ←', wdEn: 'East ←', iconFile: (p) => `berawan-${p}.svg` },
+    ];
+
+    if (level >= bahaya) {
+      const excess = Math.min(1, (level - bahaya) / 80);
+      const isStorm = level >= bahaya + 35;
+      temperature_c = isStorm ? 23 : 24;
+      humidity_percent = Math.round(95 + excess * 4);
+      precipNum = Math.round((24 + excess * 24) * 10) / 10;
+      condition = isStorm
+        ? (en ? 'Thunderstorm' : 'Hujan Petir')
+        : (en ? 'Heavy Rain' : 'Hujan Lebat');
+      wind_speed_kph = Math.round((16.5 + excess * 8.5) * 10) / 10;
+      wind_direction = en ? 'Southwest ↗' : 'Barat Daya ↗';
+      visibility_km = isStorm ? '1.5 km' : '2.5 km';
+      cloud_cover_percent = 100;
+      weather_icon = iconUrl(isStorm ? 'hujan petir.svg' : 'hujan lebat.svg');
+      slotSpecs = [
+        { tempDelta: 0, hu: 96, tp: Math.round(precipNum * 0.75 * 10) / 10, condId: 'Hujan Lebat', condEn: 'Heavy Rain', ws: 15.8, wdId: 'Barat Daya ↗', wdEn: 'Southwest ↗', iconFile: () => 'hujan lebat.svg' },
+        { tempDelta: 1, hu: 93, tp: 11.4, condId: 'Hujan Sedang', condEn: 'Moderate Rain', ws: 11.2, wdId: 'Barat →', wdEn: 'West →', iconFile: () => 'hujan sedang.svg' },
+        { tempDelta: 1, hu: 89, tp: 3.6, condId: 'Hujan Ringan', condEn: 'Light Rain', ws: 7.4, wdId: 'Barat →', wdEn: 'West →', iconFile: () => 'hujan ringan.svg' },
+        { tempDelta: 2, hu: 85, tp: 0.4, condId: 'Berawan', condEn: 'Mostly Cloudy', ws: 5.1, wdId: 'Selatan ↑', wdEn: 'South ↑', iconFile: (p) => `berawan-${p}.svg` },
+      ];
+    } else if (level >= siaga) {
+      const ratio = Math.min(1, (level - siaga) / Math.max(1, bahaya - siaga));
+      temperature_c = 25;
+      humidity_percent = Math.round(89 + ratio * 5);
+      precipNum = Math.round((8.5 + ratio * 10.5) * 10) / 10;
+      condition = en ? 'Moderate Rain' : 'Hujan Sedang';
+      wind_speed_kph = Math.round((10.2 + ratio * 4.8) * 10) / 10;
+      wind_direction = en ? 'West →' : 'Barat →';
+      visibility_km = '4.5 km';
+      cloud_cover_percent = 95;
+      weather_icon = iconUrl('hujan sedang.svg');
+      slotSpecs = [
+        { tempDelta: 0, hu: 92, tp: Math.round(precipNum * 0.8 * 10) / 10, condId: 'Hujan Sedang', condEn: 'Moderate Rain', ws: 10.4, wdId: 'Barat →', wdEn: 'West →', iconFile: () => 'hujan sedang.svg' },
+        { tempDelta: 0, hu: 88, tp: 3.8, condId: 'Hujan Ringan', condEn: 'Light Rain', ws: 7.2, wdId: 'Barat Daya ↗', wdEn: 'Southwest ↗', iconFile: () => 'hujan ringan.svg' },
+        { tempDelta: 1, hu: 84, tp: 0.5, condId: 'Berawan', condEn: 'Mostly Cloudy', ws: 5.4, wdId: 'Selatan ↑', wdEn: 'South ↑', iconFile: (p) => `berawan-${p}.svg` },
+        { tempDelta: 2, hu: 80, tp: 0, condId: 'Cerah Berawan', condEn: 'Partly Cloudy', ws: 4.1, wdId: 'Tenggara ↖', wdEn: 'Southeast ↖', iconFile: (p) => `cerah berawan-${p}.svg` },
+      ];
+    } else if (level >= siaga * 0.65) {
+      const ratio = Math.min(1, (level - siaga * 0.65) / Math.max(1, siaga * 0.35));
+      temperature_c = isNight ? 25 : 27;
+      humidity_percent = Math.round(82 + ratio * 6);
+      precipNum = Math.round((1.8 + ratio * 3.4) * 10) / 10;
+      condition = en ? 'Light Rain' : 'Hujan Ringan';
+      wind_speed_kph = Math.round((6.5 + ratio * 2.5) * 10) / 10;
+      wind_direction = en ? 'South ↑' : 'Selatan ↑';
+      visibility_km = '7.5 km';
+      cloud_cover_percent = 86;
+      weather_icon = iconUrl('hujan ringan.svg');
+      slotSpecs = [
+        { tempDelta: 0, hu: 86, tp: 2.1, condId: 'Hujan Ringan', condEn: 'Light Rain', ws: 6.8, wdId: 'Selatan ↑', wdEn: 'South ↑', iconFile: () => 'hujan ringan.svg' },
+        { tempDelta: -1, hu: 84, tp: 0.6, condId: 'Berawan', condEn: 'Mostly Cloudy', ws: 5.2, wdId: 'Tenggara ↖', wdEn: 'Southeast ↖', iconFile: (p) => `berawan-${p}.svg` },
+        { tempDelta: 0, hu: 81, tp: 0, condId: 'Berawan', condEn: 'Mostly Cloudy', ws: 4.5, wdId: 'Timur ←', wdEn: 'East ←', iconFile: (p) => `berawan-${p}.svg` },
+        { tempDelta: 1, hu: 78, tp: 0, condId: 'Cerah Berawan', condEn: 'Partly Cloudy', ws: 4.0, wdId: 'Timur ←', wdEn: 'East ←', iconFile: (p) => `cerah berawan-${p}.svg` },
+      ];
+    }
+
+    const forecast_slots = slotSpecs.map((spec, idx) => {
+      const slotDate = new Date(wibMs + (idx + 1) * 3 * 60 * 60 * 1000);
+      const hr = slotDate.getUTCHours();
+      const slotPeriod: 'am' | 'pm' = hr < 6 || hr >= 18 ? 'pm' : 'am';
+      return {
+        time_wib: `${pad2(hr)}.00`,
+        date_label: formatDateShort(slotDate),
+        temperature_c: temperature_c + spec.tempDelta,
+        humidity_percent: spec.hu,
+        precipitation_mm: spec.tp,
+        condition: en ? spec.condEn : spec.condId,
+        wind_speed_kph: spec.ws,
+        wind_direction: en ? spec.wdEn : spec.wdId,
+        weather_icon: iconUrl(spec.iconFile(slotPeriod)),
+      };
+    });
+
+    return {
+      source: 'BMKG' as const,
+      adm4: '32.76.06.1002',
+      location_name: 'Kukusan, Beji, Kota Depok',
+      temperature_c,
+      humidity_percent,
+      precipitation_mm: `${precipNum.toLocaleString(en ? 'en-US' : 'id-ID')} mm`,
+      condition,
+      wind_speed_kph,
+      wind_direction,
+      visibility_km,
+      cloud_cover_percent,
+      weather_icon,
+      valid_at: validAt,
+      valid_hour_wib: slotHour,
+      analysis_date: null,
+      last_updated: timeLabel,
+      forecast_slots,
+    };
+  }, [currentLevel, thresholdSiaga, thresholdBahaya, language]);
+
+  const isSensorSimWeather = weatherMode === 'sensor_sim';
+  const activeWeather = isSensorSimWeather ? sensorLinkedWeather : liveWeather;
 
   // Audio warning playback is managed globally by App.tsx across Dashboard, Simulasi 3D, and Kontrol PLC.
 
@@ -1212,59 +1375,117 @@ export default function SCADADashboard({
         </div>
       </div>
 
-      {/* ROW 3: OFFICIAL BMKG PUBLIC API WEATHER FORECAST */}
-      <div id="bmkg-gauge" className={`col-span-12 min-w-0 ${themeCard} rounded-2xl p-4 sm:p-5 lg:p-6 relative overflow-hidden`}>
-        <div className={`flex flex-wrap justify-between items-center gap-3 pb-4 mb-5 border-b ${themeBorder}`}>
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex flex-col">
-              <span className={`text-[10px] font-bold uppercase tracking-[0.22em] ${themeTextMuted} font-mono`}>
-                {language === 'en' ? 'Official BMKG Weather Forecast' : 'Prakiraan Cuaca Resmi BMKG'}
+      {/* ROW 3: OFFICIAL BMKG PUBLIC API WEATHER FORECAST (WITH SENSOR-SYNCED DEMO MODE) */}
+      <div
+        id="bmkg-gauge"
+        className={`col-span-12 min-w-0 ${themeCard} ${
+          isSensorSimWeather ? 'border-amber-500/30' : ''
+        } rounded-2xl p-4 sm:p-5 lg:p-6 relative overflow-hidden transition-colors`}
+      >
+        <div className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 pb-4 mb-5 border-b ${themeBorder}`}>
+          <div className="flex flex-col gap-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <span className={`text-[10px] font-bold uppercase tracking-[0.2em] ${themeTextMuted} font-mono`}>
+                {isSensorSimWeather
+                  ? (language === 'en' ? 'Weather Simulation · Sensor-Linked' : 'Simulasi Cuaca · Sinkron Sensor')
+                  : (language === 'en' ? 'Official BMKG Weather Forecast' : 'Prakiraan Cuaca Resmi BMKG')}
               </span>
-              <span className="font-mono text-[10px] text-[#3B82F6] tracking-wide mt-0.5">
-                {liveWeather?.source === 'Open-Meteo'
-                  ? (language === 'en' ? 'Open-Meteo Live Fallback · BMKG Feed Currently Empty' : 'Fallback Open-Meteo · Feed API BMKG Sedang Kosong')
-                  : `${language === 'en' ? 'BMKG Public API' : 'API Publik BMKG'} · ADM4 ${liveWeather?.adm4 || '32.76.06.1005'}`}
-              </span>
+              {activeWeather?.valid_hour_wib && (
+                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider font-mono ${isSensorSimWeather ? 'text-amber-400' : 'text-sky-400'}`}>
+                  <span>
+                    · {isSensorSimWeather
+                      ? `ESP32 ${currentLevel.toFixed(1)} cm`
+                      : (language === 'en' ? `Slot ${activeWeather.valid_hour_wib}` : `Prakiraan ${activeWeather.valid_hour_wib}`)}
+                  </span>
+                  <span
+                    title={
+                      isSensorSimWeather
+                        ? (language === 'en'
+                            ? 'Simulated weather synced to live ESP32 water elevation for indoor hardware demos'
+                            : 'Simulasi cuaca mengikuti tinggi air sensor ESP32 untuk demo hardware di dalam ruangan')
+                        : (language === 'en'
+                            ? `Official BMKG 3-hourly forecast slot (${activeWeather.valid_at})`
+                            : `Slot prakiraan 3-jaman resmi BMKG (${activeWeather.valid_at})`)
+                    }
+                  >
+                    <Info className={`w-3 h-3 cursor-help ${isSensorSimWeather ? 'text-amber-400' : 'text-sky-400'}`} />
+                  </span>
+                </span>
+              )}
             </div>
-            {liveWeather?.valid_hour_wib && (
-              <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-sky-400 font-mono">
-                <span>
-                  · {language === 'en'
-                    ? `Slot ${liveWeather.valid_hour_wib}`
-                    : `Prakiraan ${liveWeather.valid_hour_wib}`}
-                </span>
-                <span
-                  title={
-                    language === 'en'
-                      ? `Official BMKG 3-hourly forecast slot (${liveWeather.valid_at})`
-                      : `Slot prakiraan 3-jaman resmi BMKG (${liveWeather.valid_at})`
-                  }
-                >
-                  <Info className="w-3 h-3 text-sky-400 cursor-help" />
-                </span>
-              </span>
-            )}
+
+            <span className={`font-mono text-[10px] tracking-wide leading-snug ${isSensorSimWeather ? 'text-amber-400/90' : 'text-[#3B82F6]'}`}>
+              {isSensorSimWeather
+                ? (language === 'en'
+                    ? `Simulated from ESP32 elevation (${alertStatus}) · Not live BMKG feed`
+                    : `Simulasi berbasis elevasi ESP32 (${alertStatus}) · Bukan feed live BMKG`)
+                : liveWeather?.source === 'Open-Meteo'
+                  ? (language === 'en' ? 'Open-Meteo Live Fallback · BMKG Feed Currently Empty' : 'Fallback Open-Meteo · Feed API BMKG Sedang Kosong')
+                  : `${language === 'en' ? 'BMKG Public API' : 'API Publik BMKG'} · ADM4 ${liveWeather?.adm4 || '32.76.06.1002'}`}
+            </span>
           </div>
 
-          <div className="flex items-center gap-3">
-            {liveWeather?.last_updated && (
-              <span className={`text-[10px] font-mono tabular-nums ${themeTextMuted}`}>
-                {language === 'en' ? 'Synced: ' : 'Disinkronkan: '}{liveWeather.last_updated}
-              </span>
-            )}
-            <button
-              id="btn-sync-weather"
-              onClick={() => fetchLiveWeather(language)}
-              disabled={loadingWeather}
-              className={`p-2 rounded-lg border transition-all cursor-pointer ${isDark ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'}`}
-              title={language === 'en' ? 'Refresh Official BMKG Data' : 'Muat Ulang Data Resmi BMKG'}
+          {/* Right Header Controls: Sync Info (left on sm+) + Segmented Mode Switch anchored far-right (zero layout shift) */}
+          <div className="flex flex-col sm:flex-row sm:items-center md:justify-end gap-2.5 w-full md:w-auto shrink-0">
+            <div
+              role="group"
+              aria-label={language === 'en' ? 'Weather data source mode' : 'Mode sumber data cuaca'}
+              className={`order-1 sm:order-2 grid grid-cols-2 sm:inline-flex w-full sm:w-auto p-1 rounded-xl border ${
+                isDark ? 'bg-black/40 border-white/10' : 'bg-slate-100 border-slate-200'
+              }`}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loadingWeather ? 'animate-spin' : ''}`} />
-            </button>
+              <button
+                type="button"
+                onClick={() => setWeatherMode('live')}
+                className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  !isSensorSimWeather
+                    ? 'bg-[#3B82F6] text-black shadow-sm'
+                    : isDark
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${!isSensorSimWeather ? 'bg-black/70' : 'bg-emerald-400'}`} />
+                BMKG Live
+              </button>
+              <button
+                type="button"
+                onClick={() => setWeatherMode('sensor_sim')}
+                className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  isSensorSimWeather
+                    ? 'bg-amber-400 text-black shadow-sm'
+                    : isDark
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${isSensorSimWeather ? 'bg-black/70' : 'bg-amber-400'}`} />
+                {language === 'en' ? 'Sensor Sync' : 'Sinkron Sensor'}
+              </button>
+            </div>
+
+            {!isSensorSimWeather && (
+              <div className="order-2 sm:order-1 flex items-center justify-between sm:justify-end gap-2.5">
+                {liveWeather?.last_updated && (
+                  <span className={`text-[10px] font-mono tabular-nums whitespace-nowrap ${themeTextMuted}`}>
+                    {language === 'en' ? 'Synced: ' : 'Disinkronkan: '}{liveWeather.last_updated}
+                  </span>
+                )}
+                <button
+                  id="btn-sync-weather"
+                  onClick={() => fetchLiveWeather(language)}
+                  disabled={loadingWeather}
+                  className={`p-2 rounded-lg border transition-all cursor-pointer shrink-0 ${isDark ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'}`}
+                  title={language === 'en' ? 'Refresh Official BMKG Data' : 'Muat Ulang Data Resmi BMKG'}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingWeather ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        {loadingWeather ? (
+        {!isSensorSimWeather && loadingWeather ? (
           <div className="py-6 flex flex-col items-center justify-center">
             <RefreshCw className="w-5 h-5 animate-spin text-[#3B82F6] mb-2" />
             <span className={`text-[10px] font-mono uppercase tracking-wider ${themeTextMuted} text-center px-4`}>
@@ -1273,15 +1494,15 @@ export default function SCADADashboard({
                 : 'Mengambil data prakiraan cuaca resmi dari API publik BMKG...'}
             </span>
           </div>
-        ) : liveWeather ? (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            {/* Left Zone: Verbatim BMKG Temperature, Condition & Location */}
-            <div className="lg:col-span-4 flex items-center justify-center gap-4">
+        ) : activeWeather ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-5 lg:gap-6 items-center">
+            {/* Left Zone: Weather Hero (Temperature, Condition & Location) */}
+            <div className="md:col-span-1 lg:col-span-4 flex items-center justify-center gap-4">
               <div className="relative flex-shrink-0">
-                {liveWeather.weather_icon ? (
+                {activeWeather.weather_icon ? (
                   <img
-                    src={liveWeather.weather_icon}
-                    alt={liveWeather.condition}
+                    src={activeWeather.weather_icon}
+                    alt={activeWeather.condition}
                     className="w-16 h-16 object-contain filter drop-shadow"
                     referrerPolicy="no-referrer"
                   />
@@ -1293,30 +1514,30 @@ export default function SCADADashboard({
               <div className="min-w-0">
                 <div className="flex items-baseline flex-wrap gap-x-2">
                   <span className={`text-4xl font-bold tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                    {liveWeather.temperature_c}°C
+                    {activeWeather.temperature_c}°C
                   </span>
                   <span className={`text-sm font-semibold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                    {liveWeather.condition}
+                    {activeWeather.condition}
                   </span>
                 </div>
                 <span className={`text-[11px] ${themeTextSub} block mt-1 truncate`}>
-                  {language === 'en' ? 'in ' : 'di '}{liveWeather.location_name}
+                  {language === 'en' ? 'in ' : 'di '}{activeWeather.location_name}
                 </span>
                 <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] ${themeTextMuted} font-mono mt-1 tabular-nums`}>
                   <span>
-                    {language === 'en' ? 'Precip: ' : 'Curah hujan: '}{liveWeather.precipitation_mm ?? '—'}
+                    {language === 'en' ? 'Precip: ' : 'Curah hujan: '}{activeWeather.precipitation_mm ?? '—'}
                   </span>
-                  {typeof liveWeather.cloud_cover_percent === 'number' && (
+                  {typeof activeWeather.cloud_cover_percent === 'number' && (
                     <span>
-                      {language === 'en' ? 'Cloud: ' : 'Tutupan awan: '}{liveWeather.cloud_cover_percent}%
+                      {language === 'en' ? 'Cloud: ' : 'Tutupan awan: '}{activeWeather.cloud_cover_percent}%
                     </span>
                   )}
                 </div>
               </div>
             </div>
 
-            {/* Middle Zone: 2x2 Verbatim Atmospheric Telemetry Grid */}
-            <div className="lg:col-span-4 grid grid-cols-2 gap-2.5">
+            {/* Middle Zone: 2x2 Atmospheric Telemetry Grid */}
+            <div className="md:col-span-1 lg:col-span-4 grid grid-cols-2 gap-2.5">
               <div className={`flex items-center gap-2.5 px-3 py-2.5 border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-100'} rounded-xl`}>
                 <div className="text-sky-500 p-1.5 bg-sky-500/10 rounded-lg shrink-0">
                   <Droplet className="w-3.5 h-3.5" />
@@ -1324,7 +1545,7 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Humidity' : 'Kelembapan'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {typeof liveWeather.humidity_percent === 'number' ? `${liveWeather.humidity_percent}%` : '—'}
+                    {typeof activeWeather.humidity_percent === 'number' ? `${activeWeather.humidity_percent}%` : '—'}
                   </span>
                 </div>
               </div>
@@ -1336,8 +1557,8 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Wind Speed' : 'Kecepatan Angin'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {typeof liveWeather.wind_speed_kph === 'number'
-                      ? `${liveWeather.wind_speed_kph.toLocaleString(language === 'en' ? 'en-US' : 'id-ID')} ${language === 'en' ? 'km/h' : 'km/j'}`
+                    {typeof activeWeather.wind_speed_kph === 'number'
+                      ? `${activeWeather.wind_speed_kph.toLocaleString(language === 'en' ? 'en-US' : 'id-ID')} ${language === 'en' ? 'km/h' : 'km/j'}`
                       : '—'}
                   </span>
                 </div>
@@ -1350,7 +1571,7 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Wind Direction' : 'Arah Angin'}</span>
                   <span className={`font-bold mt-0.5 truncate ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {liveWeather.wind_direction || '—'}
+                    {activeWeather.wind_direction || '—'}
                   </span>
                 </div>
               </div>
@@ -1362,28 +1583,30 @@ export default function SCADADashboard({
                 <div className="flex flex-col text-[10px] leading-tight min-w-0">
                   <span className={themeTextMuted}>{language === 'en' ? 'Visibility' : 'Jarak Pandang'}</span>
                   <span className={`font-bold mt-0.5 tabular-nums ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {liveWeather.visibility_km || '—'}
+                    {activeWeather.visibility_km || '—'}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Right Zone: Verbatim Upcoming 3-Hourly BMKG Forecast Slots */}
-            <div className={`lg:col-span-4 flex flex-col gap-2 p-3.5 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
+            {/* Right Zone: Upcoming 3-Hourly Forecast Slots */}
+            <div className={`md:col-span-2 lg:col-span-4 flex flex-col gap-2 p-3.5 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/80 border-slate-200/80'}`}>
               <div className="flex items-center justify-between gap-2">
-                <span className={`text-[9px] font-bold uppercase tracking-[0.18em] font-mono ${themeTextMuted}`}>
-                  {liveWeather.source === 'Open-Meteo'
-                    ? (language === 'en' ? 'Upcoming 3-Hourly Forecast (WIB)' : 'Prakiraan 3-Jaman Berikutnya (WIB)')
-                    : (language === 'en' ? 'Upcoming BMKG Forecast (WIB)' : 'Prakiraan BMKG Berikutnya (WIB)')}
+                <span className={`text-[9px] font-bold uppercase tracking-[0.18em] font-mono ${isSensorSimWeather ? 'text-amber-400/90' : themeTextMuted}`}>
+                  {isSensorSimWeather
+                    ? (language === 'en' ? 'Simulated Outlook (WIB)' : 'Proyeksi Cuaca Simulasi (WIB)')
+                    : activeWeather.source === 'Open-Meteo'
+                      ? (language === 'en' ? 'Upcoming 3-Hourly Forecast (WIB)' : 'Prakiraan 3-Jaman Berikutnya (WIB)')
+                      : (language === 'en' ? 'Upcoming BMKG Forecast (WIB)' : 'Prakiraan BMKG Berikutnya (WIB)')}
                 </span>
                 <span className={`text-[9px] font-mono tabular-nums ${themeTextMuted}`}>
-                  {liveWeather.valid_at || '—'}
+                  {activeWeather.valid_at || '—'}
                 </span>
               </div>
 
-              {Array.isArray(liveWeather.forecast_slots) && liveWeather.forecast_slots.length > 0 ? (
+              {Array.isArray(activeWeather.forecast_slots) && activeWeather.forecast_slots.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {liveWeather.forecast_slots.map((slot, idx) => (
+                  {activeWeather.forecast_slots.map((slot, idx) => (
                     <div
                       key={`${slot.date_label}-${slot.time_wib}-${idx}`}
                       title={`${slot.date_label} ${slot.time_wib} WIB · ${slot.condition} · ${slot.wind_speed_kph ?? '—'} km/j (${slot.wind_direction})`}

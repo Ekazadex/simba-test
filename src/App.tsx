@@ -556,11 +556,11 @@ export default function App() {
 
   const themeText = isDark ? 'text-slate-300' : 'text-slate-700';
   const themeBorder = isDark ? 'border-[#141417]' : 'border-slate-300';
-  const themeNav = isDark ? 'bg-[#0D0D0F]/90 border-white/5' : 'bg-white border-slate-200 shadow-sm';
+  const themeNav = isDark ? 'bg-[#0D0D0F]/90 border-white/10 shadow-sm shadow-black/40' : 'bg-white/95 border-slate-200 shadow-sm';
   const themeFooter = isDark ? 'border-t border-white/5 bg-[#0A0A0B]' : 'border-t border-slate-200 bg-white shadow-inner';
 
   return (
-    <div id="app-root" className={`min-h-screen overflow-x-hidden ${themeBg} ${themeText} flex flex-col font-sans border-[0px] ${themeBorder} scada-grid transition-all duration-700 ease-in-out relative`}>
+    <div id="app-root" className={`min-h-screen overflow-x-clip ${themeBg} ${themeText} flex flex-col font-sans border-[0px] ${themeBorder} scada-grid transition-all duration-700 ease-in-out relative`}>
       
       {/* IMMERSIVE EMERGENCY FULL-SCREEN TINT OVERLAYS (POINTER-EVENTS-NONE) */}
       {currentAlertStatus === 'Siaga' && (
@@ -583,7 +583,7 @@ export default function App() {
       )}
       
       {/* GLOBAL SCADA CONSOLE TOP NAV BAR */}
-      <nav id="top-nav" className={`border-b ${isDark ? 'border-white/5' : 'border-slate-200'} ${themeNav} backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3 rounded-t-xl`}>
+      <nav id="top-nav" className={`border-b ${isDark ? 'border-white/10' : 'border-slate-200'} ${themeNav} backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3`}>
         <div className="flex items-center justify-between gap-3">
           {/* BRAND & STATUS HEADER */}
           <div className="flex items-center gap-2.5 min-w-0">
