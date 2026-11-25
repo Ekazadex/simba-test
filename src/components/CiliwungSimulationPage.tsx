@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Curve } from 'recharts';
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from 'recharts';
 import {
   Map as MapIcon,
   LineChart as LineChartIcon,
@@ -10,16 +19,17 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronUp,
+  Clock,
+  Activity,
 } from 'lucide-react';
 import { Map2D } from './CiliwungHardwareLiveView';
 import CiliwungOfficial3DView from './CiliwungOfficial3DView';
-import graphScale from './ciliwung-graph-scale.json';
+import { runLstmForecast } from '../ml/lstmEngine';
 import { unlockAlertAudio } from '../utils/alarmAudio';
 import { getApiBaseUrl } from '../utils/apiBase';
 
 type ScenarioId = 'ringan' | 'sedang' | 'lebat';
 type SpeedMultiplier = 1 | 10 | 25 | 50 | 150;
-type SimulationView = 'map2d' | 'map3d' | 'graph';
 type SimulationTab = 'map' | 'graph';
 type MapLayer = 'map3d' | 'map2d';
 type SimulationMode = 'legacy' | 'rain_replay';
@@ -37,25 +47,6 @@ type CiliwungNode = {
   rainMm5m?: number | null;
   rainSource?: string;
   tmaSource?: string;
-};
-
-type CiliwungForecast = {
-  runId: string | null;
-  nodeId: string;
-  mode?: string;
-  status: 'available' | 'unavailable';
-  reason?: string;
-  issuedAt?: string;
-  generatedAt?: string;
-  clockBasis?: string;
-  predictedTmaCm?: { '30': number; '60': number };
-  crossingWithin?: { '30': boolean | null; '60': boolean | null };
-  trajectoryCm?: number[];
-  thresholdBanjirCm?: number | null;
-  inputProvenance?: { upstreamFeature?: string; rain?: string; tma?: string; bmkgContext?: string };
-  method?: string;
-  modelVersion?: string;
-  quality?: string;
 };
 
 type CiliwungState = {
@@ -76,21 +67,22 @@ type CiliwungState = {
   updatedAt: number;
 };
 
-type LegacyProjection = {
-  status: 'available';
-  method: 'legacy_simulation_projection';
-  runId: string;
-  nodeId: string;
-  issuedSimTimeSeconds: number;
-  speedMultiplier: SpeedMultiplier;
-  points: Array<{ afterSeconds: number; tmaCm: number }>;
-  scenarioCompletes: boolean;
-};
-
 type HistoryPoint = {
   runId: string;
   time: number;
   values: Record<string, number>;
+};
+
+const NODE_THRESHOLDS_CM: Record<string, { siaga: number; bahaya: number | null }> = {
+  UP1: { siaga: 70, bahaya: null },
+  UP2: { siaga: 180, bahaya: 280 },
+  UP3: { siaga: 180, bahaya: 280 },
+  UP4: { siaga: 180, bahaya: 280 },
+  N1: { siaga: 180, bahaya: 280 },
+  N2: { siaga: 180, bahaya: 280 },
+  N3: { siaga: 180, bahaya: 280 },
+  N4: { siaga: 180, bahaya: 280 },
+  N5: { siaga: 180, bahaya: 280 },
 };
 
 const SIMULATION_UPSTREAM = [
@@ -124,8 +116,6 @@ const SCENARIOS: Array<{ id: ScenarioId; labelId: string; labelEn: string; descr
   },
 ];
 
-const MAIN_GRAPH_NODES = ['UP1', 'UP2', 'UP3', 'UP4', 'N1', 'N2', 'N3', 'N4', 'N5'];
-const FORECAST_NODES = new Set(MAIN_GRAPH_NODES);
 const SPEED_OPTIONS: SpeedMultiplier[] = [1, 10, 25, 50, 150];
 
 function formatTime(seconds: number) {
@@ -169,19 +159,12 @@ export default function CiliwungSimulationPage({
   const [simTab, setSimTab] = useState<SimulationTab>('map');
   const [mapLayer, setMapLayer] = useState<MapLayer>('map3d');
   const [showScenarioDetails, setShowScenarioDetails] = useState(false);
-  const activeView: SimulationView = simTab === 'graph' ? 'graph' : mapLayer;
   const [state, setState] = useState<CiliwungState | null>(null);
-  const [forecasts, setForecasts] = useState<Record<string, CiliwungForecast>>({});
   const [history, setHistory] = useState<HistoryPoint[]>([]);
-  const [legacyProjection, setLegacyProjection] = useState<LegacyProjection | null>(null);
-  const [projectionError, setProjectionError] = useState(false);
   const [graphNodeId, setGraphNodeId] = useState('N1');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const projectionRequestRef = useRef<symbol | null>(null);
-
-  useEffect(() => () => { projectionRequestRef.current = null; }, []);
 
   useEffect(() => {
     if (!onAlertStatusChange) return;
@@ -269,21 +252,6 @@ export default function CiliwungSimulationPage({
     };
 
     stream.addEventListener('state', handleState as EventListener);
-    stream.addEventListener(
-      'forecast',
-      ((event: MessageEvent<string>) => {
-        try {
-          const next = JSON.parse(event.data) as CiliwungForecast | null;
-          if (next && typeof next.nodeId === 'string') {
-            setForecasts((current) => ({ ...current, [next.nodeId]: next }));
-          } else {
-            setForecasts({});
-          }
-        } catch {
-          setError(en ? 'Invalid forecast from backend.' : 'Forecast dari backend tidak valid.');
-        }
-      }) as EventListener
-    );
     stream.onerror = () =>
       setError(en ? 'Simulation stream disconnected. Keep the backend running.' : 'Stream simulasi terputus. Pastikan backend Website tetap berjalan.');
 
@@ -321,37 +289,6 @@ export default function CiliwungSimulationPage({
     };
   }, [apiBase, state?.runId, state?.mode, state?.status]);
 
-  useEffect(() => {
-    const replay = state?.mode === 'rain_replay' || state?.mode === 'synthetic_demo' || Boolean(state?.episodeId);
-    if (!replay || state?.status !== 'running' || !state.runId || !FORECAST_NODES.has(graphNodeId)) return;
-    let active = true;
-    fetch(`${apiBase}/api/ciliwung-forecast/latest?nodeId=${encodeURIComponent(graphNodeId)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error('forecast_unavailable');
-        const payload = await response.json();
-        const next = (payload?.forecast ?? payload) as CiliwungForecast;
-        if (active && next && typeof next.nodeId === 'string') {
-          setForecasts((current) => {
-            const previous = current[next.nodeId];
-            return previous?.runId === next.runId && previous.status === 'available' && next.status === 'unavailable'
-              ? current
-              : { ...current, [next.nodeId]: next };
-          });
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setForecasts((current) => ({
-            ...current,
-            [graphNodeId]: { runId: state.runId, nodeId: graphNodeId, status: 'unavailable', reason: 'forecast_unavailable' },
-          }));
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [apiBase, state?.runId, state?.mode, state?.episodeId, state?.status, graphNodeId]);
-
   const availableNodes = state?.cupNodes ?? [];
   useEffect(() => {
     if (availableNodes.length && !availableNodes.some((node) => node.id === graphNodeId)) {
@@ -362,187 +299,91 @@ export default function CiliwungSimulationPage({
   const selectedProfile = SCENARIOS.find((scenario) => scenario.id === selectedScenario) ?? SCENARIOS[0];
   const isRunning = state?.status === 'running';
   const isReplay = state?.mode === 'rain_replay' || state?.mode === 'synthetic_demo' || Boolean(state?.episodeId);
-  const candidateForecast = forecasts[graphNodeId];
-  const selectedForecast =
-    isReplay &&
-    isRunning &&
-    candidateForecast?.runId === state?.runId &&
-    (candidateForecast.issuedAt === state?.timestampUtc || (candidateForecast.status === 'unavailable' && !candidateForecast.issuedAt))
-      ? candidateForecast
-      : null;
-
-  const thresholdCompatible =
-    selectedForecast?.thresholdBanjirCm === null
-      ? graphNodeId === 'UP1' && ([30, 60] as const).every((minutes) => selectedForecast.crossingWithin?.[minutes] === null)
-      : graphNodeId !== 'UP1' &&
-        Number.isFinite(selectedForecast?.thresholdBanjirCm) &&
-        ([30, 60] as const).every((minutes) => typeof selectedForecast?.crossingWithin?.[minutes] === 'boolean');
-
-  const forecastAvailable =
-    selectedForecast?.status === 'available' &&
-    Number.isFinite(selectedForecast.predictedTmaCm?.['30']) &&
-    Number.isFinite(selectedForecast.predictedTmaCm?.['60']) &&
-    selectedForecast.trajectoryCm?.length === 12 &&
-    selectedForecast.trajectoryCm.every(Number.isFinite) &&
-    thresholdCompatible;
 
   const cupCarbonActive = state?.cupcarbon?.status === 'active';
   const cupCarbonNodeCount = state?.cupcarbon?.activeNodeCount ?? 0;
   const currentNode = availableNodes.find((node) => node.id === graphNodeId);
   const currentTime = state?.simTimeSeconds ?? 0;
-  const projectionOffset = legacyProjection ? currentTime - legacyProjection.issuedSimTimeSeconds : -1;
-
-  const projectionPoint =
-    isRunning &&
-    !isReplay &&
-    legacyProjection?.runId === state?.runId &&
-    legacyProjection.nodeId === graphNodeId &&
-    legacyProjection.speedMultiplier === state?.speedMultiplier
-      ? legacyProjection.points.find(
-          (point) =>
-            Math.abs(point.afterSeconds - projectionOffset) < 0.001 &&
-            Number.isFinite(currentNode?.tmaCm) &&
-            Math.abs(point.tmaCm - currentNode!.tmaCm) < 0.011
-        )
-      : undefined;
-
-  const projectionRemaining = legacyProjection
-    ? legacyProjection.points[legacyProjection.points.length - 1].afterSeconds - projectionOffset
-    : 0;
-  const projectionHasFuture = Boolean(
-    projectionPoint &&
-      legacyProjection &&
-      projectionRemaining > 0 &&
-      (projectionRemaining >= 1800 || legacyProjection.scenarioCompletes)
-  );
-
-  useEffect(() => {
-    if (
-      activeView !== 'graph' ||
-      !isRunning ||
-      isReplay ||
-      !state?.runId ||
-      !currentNode ||
-      projectionHasFuture ||
-      projectionRequestRef.current
-    )
-      return;
-
-    const requestId = Symbol('projection_request');
-    projectionRequestRef.current = requestId;
-    setProjectionError(false);
-
-    fetch(`${apiBase}/api/ciliwung-simulation/projection?nodeId=${encodeURIComponent(graphNodeId)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error('projection_unavailable');
-        return response.json() as Promise<LegacyProjection>;
-      })
-      .then((result) => {
-        if (projectionRequestRef.current !== requestId) return;
-        projectionRequestRef.current = null;
-        if (
-          result?.status !== 'available' ||
-          result.method !== 'legacy_simulation_projection' ||
-          result.runId !== state.runId ||
-          result.nodeId !== graphNodeId ||
-          !Number.isFinite(result.issuedSimTimeSeconds) ||
-          !Array.isArray(result.points) ||
-          result.points.length < 2 ||
-          !result.points.every(
-            (point, index) =>
-              Number.isFinite(point.afterSeconds) &&
-              Number.isFinite(point.tmaCm) &&
-              point.tmaCm >= 0 &&
-              (index === 0 ? point.afterSeconds === 0 : point.afterSeconds > result.points[index - 1].afterSeconds)
-          )
-        ) {
-          setProjectionError(true);
-          return;
-        }
-        setLegacyProjection(result);
-      })
-      .catch(() => {
-        if (projectionRequestRef.current === requestId) {
-          projectionRequestRef.current = null;
-          setProjectionError(true);
-        }
-      });
-  }, [
-    activeView,
-    apiBase,
-    graphNodeId,
-    isReplay,
-    isRunning,
-    state?.runId,
-    state?.simTimeSeconds,
-    state?.speedMultiplier,
-    currentNode,
-    legacyProjection,
-    projectionHasFuture,
-  ]);
 
   const currentLevel =
     state?.runId && state.status !== 'idle' && currentNode && Number.isFinite(currentNode.tmaCm) ? currentNode.tmaCm : null;
 
-  const currentHistory =
-    currentLevel === null
-      ? []
-      : [
-          ...history.filter(
-            (point) =>
-              point.runId === state?.runId &&
-              point.time < currentTime &&
-              point.time >= currentTime - 1800 &&
-              Number.isFinite(point.values[graphNodeId])
-          ),
-          { runId: state!.runId!, time: currentTime, values: { [graphNodeId]: currentLevel } },
-        ];
+  const nodeThreshold = NODE_THRESHOLDS_CM[graphNodeId] ?? { siaga: 180, bahaya: 280 };
 
-  const projectedFuture =
-    projectionHasFuture && legacyProjection
-      ? legacyProjection.points
-          .filter((point) => point.afterSeconds > projectionOffset && point.afterSeconds - projectionOffset <= 1800)
-          .filter(
-            (point, index, points) =>
-              index === points.length - 1 ||
-              index === 0 ||
-              Math.floor((point.afterSeconds - projectionOffset) / 30) >
-                Math.floor((points[index - 1].afterSeconds - projectionOffset) / 30)
-          )
-          .map((point) => ({ afterSeconds: point.afterSeconds - projectionOffset, tmaCm: point.tmaCm }))
-      : [];
+  const currentHistory = useMemo(() => {
+    if (currentLevel === null || !state?.runId) return [];
+    const matching = history
+      .filter(
+        (point) =>
+          point.runId === state.runId &&
+          point.time < currentTime &&
+          Number.isFinite(point.values[graphNodeId])
+      )
+      .slice(-23);
+    return [
+      ...matching,
+      { runId: state.runId, time: currentTime, values: { [graphNodeId]: currentLevel } },
+    ];
+  }, [history, state?.runId, currentTime, graphNodeId, currentLevel]);
 
-  const prediction =
-    forecastAvailable && currentLevel !== null
-      ? selectedForecast!.trajectoryCm!.slice(0, 6).map((tmaCm, index) => ({ afterSeconds: (index + 1) * 300, tmaCm }))
-      : projectedFuture;
+  // Run trained model_lstm_banjir.h5 multi-horizon forecast (T+30m, T+1h, T+3h, T+6h) on selected simulation node
+  const simLstmForecast = useMemo(() => {
+    if (currentLevel === null) return null;
+    const series = currentHistory
+      .map((pt) => pt.values[graphNodeId])
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    if (series.length === 0) return null;
+    return runLstmForecast(series, {
+      thresholdSiaga: nodeThreshold.siaga,
+      thresholdBahaya: nodeThreshold.bahaya ?? 9999,
+      maxReferenceHeight: nodeThreshold.bahaya ? nodeThreshold.bahaya + 120 : 260,
+    });
+  }, [currentHistory, graphNodeId, currentLevel, nodeThreshold.siaga, nodeThreshold.bahaya]);
 
-  const projectionEndsEarly = Boolean(
-    projectionPoint &&
-      legacyProjection?.scenarioCompletes &&
-      prediction.length &&
-      prediction[prediction.length - 1].afterSeconds < 1800
-  );
+  const localizedSimLstmStatus = simLstmForecast
+    ? simLstmForecast.status === 'Bahaya'
+      ? (en ? 'DANGER' : 'BAHAYA')
+      : simLstmForecast.status === 'Siaga'
+        ? (en ? 'ALERT' : 'SIAGA')
+        : (en ? 'SAFE' : 'AMAN')
+    : 'STANDBY';
 
-  const graphLevels = [
-    ...currentHistory.map((point) => point.values[graphNodeId]),
-    ...prediction.map((point) => point.tmaCm),
-  ];
+  const lastHistoricalTimeLabel =
+    currentHistory.length > 0 ? formatTime(currentHistory[currentHistory.length - 1].time) : undefined;
 
-  const reference = (graphScale.maxTmaCmByNode as Record<string, number>)[graphNodeId];
-  const graphMax = Math.max(
-    20,
-    Math.ceil((Math.max(Number.isFinite(reference) ? reference : 0, 0, ...graphLevels) * 1.1 - 1e-9) / 20) * 20
-  );
-  const graphY = (level: number) => 190 - (level / graphMax) * 180;
-  const livePoints = currentHistory.map((point) => ({
-    x: 360 - ((currentTime - point.time) / 1800) * 352,
-    y: graphY(point.values[graphNodeId]),
-  }));
-  const predictedPoints =
-    prediction.length && currentLevel !== null
-      ? [{ x: 360, y: graphY(currentLevel) }, ...prediction.map((point) => ({ x: 360 + (point.afterSeconds * 352) / 1800, y: graphY(point.tmaCm) }))]
-      : [];
+  const unifiedSimChartData = useMemo(() => {
+    if (currentHistory.length === 0) return [];
+    const base = currentHistory.map((pt, idx) => {
+      const val = Math.round(pt.values[graphNodeId] * 10) / 10;
+      return {
+        time: formatTime(pt.time),
+        elevasi: val as number | null,
+        prediksi: idx === currentHistory.length - 1 ? val : (null as number | null),
+      };
+    });
+    if (!simLstmForecast) return base;
+    return [
+      ...base,
+      { time: 'T+30m', elevasi: null, prediksi: simLstmForecast.prediction_30m },
+      { time: en ? 'T+1h' : 'T+1j', elevasi: null, prediksi: simLstmForecast.prediction_1h },
+      { time: en ? 'T+3h' : 'T+3j', elevasi: null, prediksi: simLstmForecast.prediction_3h },
+      { time: en ? 'T+6h' : 'T+6j', elevasi: null, prediksi: simLstmForecast.prediction_6h },
+    ];
+  }, [currentHistory, graphNodeId, simLstmForecast, en]);
+
+  const simAxisMax = useMemo(() => {
+    const values = unifiedSimChartData.flatMap((d) => [
+      typeof d.elevasi === 'number' ? d.elevasi : 0,
+      typeof d.prediksi === 'number' ? d.prediksi : 0,
+    ]);
+    const thresholdCeiling = nodeThreshold.bahaya ? nodeThreshold.bahaya + 30 : nodeThreshold.siaga + 70;
+    const peak = Math.max(thresholdCeiling, ...values.map((v) => v + 20));
+    return Math.ceil(peak / 20) * 20;
+  }, [unifiedSimChartData, nodeThreshold.siaga, nodeThreshold.bahaya]);
+
+  const themeBorder = isDark ? 'border-white/5' : 'border-slate-200';
+  const themeTextMuted = isDark ? 'text-zinc-500' : 'text-slate-400';
+  const themeGridColor = isDark ? '#18181B' : '#e2e8f0';
 
   async function request(path: string, body?: Record<string, unknown>) {
     setBusy(true);
@@ -890,8 +731,8 @@ export default function CiliwungSimulationPage({
           >
             <p className="mb-2">
               {en
-                ? 'Deterministic propagation across 9 stations (Puncak UP1 → Manggarai N5) synchronized live across 3D visualization, 2D corridor map, and +30m prognostic forecasts.'
-                : 'Propagasi hidrologi deterministik lintas 9 stasiun (Puncak UP1 → Manggarai N5) yang tersinkronisasi antara peta 3D, peta 2D, dan kurva prediksi +30 menit.'}
+                ? 'Deterministic propagation across 9 stations (Puncak UP1 → Manggarai N5) synchronized live across 3D visualization, 2D corridor map, and multi-horizon LSTM forecasts (T+30m, 1h, 3h, 6h).'
+                : 'Propagasi hidrologi deterministik lintas 9 stasiun (Puncak UP1 → Manggarai N5) yang tersinkronisasi antara peta 3D, peta 2D, dan kurva prediksi LSTM multi-horizon (T+30m, 1 Jam, 3 Jam, 6 Jam).'}
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               {SCENARIOS.map((sc) => (
@@ -927,7 +768,7 @@ export default function CiliwungSimulationPage({
         )}
       </section>
 
-      {/* 2 CLEAN TOP-LEVEL SIMULATION TABS (VISUALISASI PETA 3D/2D & GRAFIK PREDIKSI +30M) */}
+      {/* 2 CLEAN TOP-LEVEL SIMULATION TABS (VISUALISASI PETA 3D/2D & GRAFIK PREDIKSI LSTM) */}
       <div
         id="simulation-subtabs"
         role="tablist"
@@ -979,14 +820,18 @@ export default function CiliwungSimulationPage({
         >
           <span className="flex items-center gap-2 min-w-0">
             <LineChartIcon className="w-4 h-4 shrink-0" />
-            <span className="truncate">{en ? 'Forecast Graph (+30m)' : 'Grafik Prediksi (+30m)'}</span>
+            <span className="truncate">{en ? 'Charts & LSTM Forecast' : 'Grafik & Prediksi LSTM'}</span>
           </span>
           <span
             className={`hidden md:inline-flex font-mono text-[10px] font-bold px-2 py-0.5 rounded-md tabular-nums shrink-0 ${
               simTab === 'graph' ? 'bg-black/15 text-black' : isDark ? 'bg-white/[0.05] text-violet-400' : 'bg-slate-100 text-violet-700'
             }`}
           >
-            {currentNode ? `${currentNode.id} · ${Number.isFinite(currentNode.tmaCm) ? currentNode.tmaCm.toFixed(1) : '—'} cm` : graphNodeId}
+            {simLstmForecast
+              ? `${graphNodeId} · ${en ? '6h' : '6J'}: ${simLstmForecast.prediction_6h.toFixed(1)} cm`
+              : currentNode
+                ? `${currentNode.id} · ${Number.isFinite(currentNode.tmaCm) ? currentNode.tmaCm.toFixed(1) : '—'} cm`
+                : graphNodeId}
           </span>
         </button>
       </div>
@@ -1094,203 +939,300 @@ export default function CiliwungSimulationPage({
             </section>
           )}
 
-          {/* TAB 2: FORECAST GRAPH (+30M) */}
+          {/* TAB 2: UNIFIED SIMULATION TELEMETRY & TRAINED LSTM 4-HORIZON FORECAST (MATCHING DASHBOARD) */}
           {simTab === 'graph' && (
-            <section className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-4 sm:p-5 lg:p-6 flex flex-1 flex-col justify-between`}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-mono uppercase tracking-[0.2em] font-bold text-blue-400">
-                    {en ? 'WATER LEVEL FORECAST (+30 MIN)' : 'PREDIKSI TINGGI AIR (+30 MENIT)'}
-                  </p>
-                  <h2 className={`mt-1 text-xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                    {currentNode ? `${currentNode.id} · ${currentNode.name}` : en ? 'Waiting for node' : 'Menunggu node'}
-                  </h2>
-                  <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {isReplay
-                      ? en
-                        ? 'Synthetic replay forecast'
-                        : 'Prediksi replay sintetis'
-                      : selectedMode === 'legacy'
-                        ? `${en ? 'Routing simulation' : 'Simulasi propagasi'} · ${en ? selectedProfile.labelEn : selectedProfile.labelId}`
-                        : en
-                          ? 'Synthetic replay'
-                          : 'Replay sintetis'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded-lg px-3 py-1.5 text-xs font-mono font-bold tabular-nums ${
-                      isDark ? 'bg-white/[0.04] border border-white/10 text-slate-200' : 'bg-slate-100 border border-slate-200 text-slate-800'
-                    }`}
-                  >
-                    {en ? 'Now' : 'Saat ini'}: {currentLevel !== null ? `${currentLevel.toFixed(1)} cm` : '—'}
-                  </span>
-                  <span
-                    className={`rounded-lg px-3 py-1.5 text-xs font-mono font-bold tabular-nums ${
-                      isDark ? 'bg-blue-500/15 border border-blue-500/30 text-blue-300' : 'bg-blue-50 border border-blue-200 text-blue-700'
-                    }`}
-                  >
-                    {prediction.length && Math.abs(prediction[prediction.length - 1].afterSeconds - 1800) < 0.001
-                      ? `${en ? 'Est.' : 'Estimasi'} +30m · ${prediction[prediction.length - 1].tmaCm.toFixed(1)} cm`
-                      : '+30m · — cm'}
-                  </span>
+            <section
+              id="simulation-lstm-panel"
+              className={`${isDark ? 'bg-[#0D0D0F] border-white/5' : 'bg-white border-slate-200 shadow-sm'} rounded-2xl border p-4 sm:p-5 lg:p-6 flex flex-1 flex-col justify-between gap-5 overflow-hidden`}
+            >
+              {/* Header & Legend Row */}
+              <div className="flex flex-col gap-2.5">
+                <div className="flex flex-wrap items-start justify-between gap-2.5">
+                  <div className="min-w-0">
+                    <span className={`block text-[10px] font-bold uppercase tracking-[0.2em] ${themeTextMuted} font-mono`}>
+                      {en
+                        ? 'Unified Simulation Curve & Trained LSTM Forecast'
+                        : 'Kurva Elevasi Simulasi & Prediksi LSTM Terpadu'}
+                    </span>
+                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                      <h2 className={`text-lg sm:text-xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                        {currentNode ? `${currentNode.id} · ${currentNode.name}` : en ? 'Waiting for node' : 'Menunggu node'}
+                      </h2>
+                      <span className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {isReplay
+                          ? en
+                            ? 'Synthetic Replay'
+                            : 'Replay Sintetis'
+                          : selectedMode === 'legacy'
+                            ? `${en ? 'Routing' : 'Propagasi'} · ${en ? selectedProfile.labelEn : selectedProfile.labelId}`
+                            : en
+                              ? 'Synthetic Replay'
+                              : 'Replay Sintetis'}
+                        {currentLevel !== null ? ` · ${en ? 'Now' : 'Saat ini'}: ${currentLevel.toFixed(1)} cm` : ''}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Unified Legend Strip (Matching Dashboard) */}
+                  <div className="flex items-center gap-3 flex-wrap pt-0.5">
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-2.5 h-0.5 bg-[#3B82F6] inline-block" /> {en ? 'Actual (h)' : 'Aktual (h)'}
+                    </span>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-3 h-0.5 border-t-2 border-dashed border-violet-400 inline-block" /> {en ? 'LSTM Forecast' : 'Prediksi LSTM'}
+                    </span>
+                    <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                      <span className="w-2.5 h-0.5 border-t border-dashed border-amber-500 inline-block" /> {en ? 'Alert' : 'Siaga'} ({nodeThreshold.siaga})
+                    </span>
+                    {nodeThreshold.bahaya !== null && (
+                      <span className={`text-[10px] ${themeTextMuted} flex items-center gap-1.5 font-mono uppercase tracking-wider`}>
+                        <span className="w-2.5 h-0.5 border-t border-dashed border-rose-500 inline-block" /> {en ? 'Danger' : 'Bahaya'} ({nodeThreshold.bahaya})
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {graphLevels.length ? (
-                <div
-                  className="mt-5 flex flex-1 flex-col justify-center"
-                  role="img"
-                  aria-label={`${en ? 'Water level forecast' : 'Grafik prediksi tinggi air'} ${currentNode?.name ?? ''}`}
-                >
-                  <div className="flex gap-3">
-                    <div
-                      aria-hidden="true"
-                      className="flex h-56 sm:h-72 flex-col justify-between py-2 text-right text-xs font-mono text-slate-500"
-                    >
-                      {[4, 3, 2, 1, 0].map((step) => (
-                        <span key={step}>{(graphMax * step) / 4}</span>
-                      ))}
+              {/* Interactive Recharts AreaChart (Single Source of Truth) */}
+              <div className="w-full h-[270px] sm:h-[300px]">
+                {unifiedSimChartData.length === 0 ? (
+                  <div
+                    role="status"
+                    className={`w-full h-full flex flex-col items-center justify-center p-6 text-center rounded-xl border border-dashed ${
+                      isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="w-11 h-11 rounded-xl bg-[#3B82F6]/10 border border-[#3B82F6]/25 flex items-center justify-center text-[#3B82F6] mb-3">
+                      <Activity className="w-5 h-5" />
                     </div>
-                    <svg viewBox="0 0 720 200" className="min-w-0 flex-1 h-56 sm:h-72" preserveAspectRatio="none" aria-hidden="true">
+                    <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#3B82F6] mb-1.5">
+                      {en ? 'Simulation Standby — Ready to Plot' : 'Simulasi Standby — Siap Memplot Kurva'}
+                    </span>
+                    <p className={`text-xs max-w-md mb-4 font-sans leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                      {en
+                        ? 'Start the simulation to plot live hydrological propagation and multi-horizon LSTM projections (T+30m, 1h, 3h, 6h) for any of the 9 stations.'
+                        : 'Mulai simulasi untuk menampilkan kurva propagasi air dan proyeksi multi-horizon LSTM (T+30m, 1 Jam, 3 Jam, 6 Jam) di seluruh 9 pos pantau.'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleStart}
+                      disabled={busy || isRunning || (selectedMode === 'rain_replay' && !selectedEpisodeId)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#3B82F6] hover:bg-blue-400 text-black text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>{en ? 'Start Simulation Now' : 'Mulai Simulasi Sekarang'}</span>
+                    </button>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%" debounce={50}>
+                    <AreaChart data={unifiedSimChartData} margin={{ top: 10, right: 18, left: -16, bottom: 0 }}>
                       <defs>
-                        <linearGradient id="simulation-graph-area" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3B82F6" stopOpacity=".15" />
-                          <stop offset="95%" stopColor="#3B82F6" stopOpacity="0" />
+                        <linearGradient id="simColorLevel" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.2} />
+                          <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="simColorPrediksi" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#A78BFA" stopOpacity={0.24} />
+                          <stop offset="95%" stopColor="#A78BFA" stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      {[10, 55, 100, 145, 190].map((y) => (
-                        <line key={y} x1="8" y1={y} x2="712" y2={y} stroke="currentColor" strokeDasharray="3 3" opacity=".18" />
-                      ))}
-                      {[8, 184, 360, 536, 712].map((x) => (
-                        <line key={x} x1={x} y1="10" x2={x} y2="190" stroke="currentColor" strokeDasharray="3 3" opacity=".18" />
-                      ))}
-                      {currentHistory.length > 1 && (
-                        <>
-                          <Curve
-                            type="monotoneX"
-                            points={livePoints}
-                            baseLine={190}
-                            fill="url(#simulation-graph-area)"
-                            stroke="none"
-                          />
-                          <Curve
-                            data-testid="current-tma-trace"
-                            type="monotoneX"
-                            points={livePoints}
-                            fill="none"
-                            stroke="#3B82F6"
-                            strokeWidth="2"
-                            strokeLinejoin="round"
-                            strokeLinecap="round"
-                            vectorEffect="non-scaling-stroke"
-                          />
-                        </>
-                      )}
-                      {currentLevel !== null && <circle data-testid="current-tma-point" cx="360" cy={graphY(currentLevel)} r="4" fill="#3B82F6" />}
-                      {predictedPoints.length > 0 && (
-                        <Curve
-                          data-testid="forecast-tma-trace"
-                          type="monotoneX"
-                          points={predictedPoints}
-                          fill="none"
-                          stroke="#a78bfa"
-                          strokeWidth="2.5"
-                          strokeDasharray="1 7"
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                          vectorEffect="non-scaling-stroke"
+                      <CartesianGrid strokeDasharray="3 3" stroke={themeGridColor} />
+                      <XAxis dataKey="time" stroke="#52525B" style={{ fontSize: 10, fontFamily: 'monospace' }} />
+                      <YAxis domain={[0, simAxisMax]} stroke="#52525B" style={{ fontSize: 10, fontFamily: 'monospace' }} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: isDark ? '#0D0D0F' : '#ffffff',
+                          borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0',
+                          borderRadius: '8px',
+                        }}
+                        labelStyle={{
+                          color: isDark ? '#94a3b8' : '#475569',
+                          fontWeight: 'bold',
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        }}
+                        itemStyle={{ color: isDark ? '#fff' : '#0f172a', fontSize: 11 }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="elevasi"
+                        name={en ? 'Simulation Elevation (cm)' : 'Elevasi Simulasi (cm)'}
+                        stroke="#3B82F6"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#simColorLevel)"
+                        connectNulls={false}
+                        isAnimationActive={false}
+                      />
+                      {simLstmForecast && (
+                        <Area
+                          type="monotone"
+                          dataKey="prediksi"
+                          name={en ? 'LSTM Forecast (cm)' : 'Prediksi LSTM (cm)'}
+                          stroke="#A78BFA"
+                          strokeWidth={2}
+                          strokeDasharray="5 4"
+                          fillOpacity={1}
+                          fill="url(#simColorPrediksi)"
+                          connectNulls={false}
+                          isAnimationActive={false}
                         />
                       )}
-                      {prediction.length > 0 && (
-                        <circle
-                          cx={360 + (prediction[prediction.length - 1].afterSeconds * 352) / 1800}
-                          cy={graphY(prediction[prediction.length - 1].tmaCm)}
-                          r="3"
-                          fill="#a78bfa"
+                      {simLstmForecast && lastHistoricalTimeLabel && (
+                        <ReferenceLine
+                          x={lastHistoricalTimeLabel}
+                          stroke={isDark ? 'rgba(167,139,250,0.45)' : 'rgba(124,58,237,0.35)'}
+                          strokeDasharray="3 3"
+                          label={{
+                            value: en ? 'NOW' : 'SAAT INI',
+                            fill: '#A78BFA',
+                            fontSize: 9,
+                            position: 'insideTopRight',
+                            fontFamily: 'monospace',
+                          }}
                         />
                       )}
-                    </svg>
-                  </div>
-                  <div className="ml-9 flex justify-between gap-2 text-xs font-mono text-slate-500">
-                    <span>−30 {en ? 'min' : 'menit'}</span>
-                    <span>
-                      {en ? 'Now' : 'Saat ini'} · {formatTime(currentTime)}
-                    </span>
-                    <span>+30 {en ? 'min' : 'menit'}</span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                    <span>
-                      <span className="text-blue-400">━━</span> {en ? 'Simulation state' : 'Kondisi simulasi'}
-                    </span>
-                    <span>
-                      <span className="text-violet-400">┄┄</span> {en ? 'Forecast' : 'Prediksi'}
-                    </span>
-                    <span>{en ? 'Simulation time (mm:ss)' : 'Waktu simulasi (mm:ss)'}</span>
-                  </div>
-                </div>
-              ) : (
-                <div
-                  role="status"
-                  className={`mt-5 flex flex-1 min-h-[280px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-6 text-center text-sm ${
-                    isDark ? 'border-white/10 bg-black/20 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'
-                  }`}
-                >
-                  <span>{en ? 'Start the simulation to see the +30m forecast graph.' : 'Mulai simulasi untuk melihat grafik prediksi +30 menit.'}</span>
-                  <button
-                    type="button"
-                    onClick={handleStart}
-                    disabled={busy || isRunning || (selectedMode === 'rain_replay' && !selectedEpisodeId)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#3B82F6] hover:bg-blue-400 text-black text-xs font-bold cursor-pointer disabled:opacity-50"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>{en ? 'Start Simulation Now' : 'Mulai Simulasi Sekarang'}</span>
-                  </button>
-                </div>
-              )}
+                      <ReferenceLine
+                        y={nodeThreshold.siaga}
+                        stroke="#f59e0b"
+                        strokeDasharray="4 4"
+                        strokeWidth={1.2}
+                        label={{
+                          value: en ? 'ALERT' : 'SIAGA',
+                          fill: '#f59e0b',
+                          fontSize: 8,
+                          position: 'right',
+                          fontFamily: 'monospace',
+                        }}
+                      />
+                      {nodeThreshold.bahaya !== null && (
+                        <ReferenceLine
+                          y={nodeThreshold.bahaya}
+                          stroke="#f43f5e"
+                          strokeDasharray="4 4"
+                          strokeWidth={1.2}
+                          label={{
+                            value: en ? 'DANGER' : 'BAHAYA',
+                            fill: '#f43f5e',
+                            fontSize: 8,
+                            position: 'right',
+                            fontFamily: 'monospace',
+                          }}
+                        />
+                      )}
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
 
-              <div className="mt-3 flex flex-col gap-1">
-                {currentLevel !== null && prediction.length === 0 && (
-                  <p role="status" className="text-xs text-amber-500">
-                    {isReplay
-                      ? !isRunning
-                        ? en
-                          ? 'Replay is not running; forecast unavailable.'
-                          : 'Replay berhenti; prediksi tidak tersedia.'
-                        : selectedForecast?.reason
-                          ? `${en ? 'Forecast unavailable' : 'Prediksi tidak tersedia'}: ${selectedForecast.reason}`
-                          : en
-                            ? 'Waiting for the current forecast…'
-                            : 'Menunggu prediksi untuk kondisi saat ini…'
-                      : !isRunning
-                        ? en
-                          ? 'Simulation is not running.'
-                          : 'Simulasi tidak berjalan.'
-                        : projectionError
-                          ? en
-                            ? 'Scenario projection unavailable.'
-                            : 'Proyeksi skenario tidak tersedia.'
-                          : en
-                            ? 'Calculating scenario projection…'
-                            : 'Menghitung proyeksi skenario…'}
-                  </p>
-                )}
-                {!isReplay && prediction.length > 0 && (
-                  <p className="text-xs text-slate-500">
-                    {en
-                      ? 'Projection from the current simulation hydrological routing.'
-                      : 'Proyeksi dari simulasi propagasi hidrologi saat ini.'}
-                    {projectionEndsEarly &&
-                      ` ${en ? 'Scenario ends at' : 'Skenario selesai pada'} +${formatTime(
-                        prediction[prediction.length - 1].afterSeconds
-                      )} ${en ? '(mm:ss); no later projection.' : '(mm:ss); tidak ada proyeksi setelahnya.'}`}
-                  </p>
-                )}
-                <p className="text-[11px] text-slate-500">
-                  {en
-                    ? 'Synthetic demonstration for capstone hydrological routing visualization.'
-                    : 'Demonstrasi sintetis untuk visualisasi propagasi banjir DAS Ciliwung.'}
-                </p>
+              {/* Trained LSTM 4-Horizon Breakdown (T+30m, T+1h, T+3h, T+6h — Matching Dashboard) */}
+              <div className={`pt-4 border-t ${themeBorder} flex flex-col gap-3.5`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-col min-w-0">
+                    <span className={`text-[10px] font-bold uppercase tracking-[0.2em] ${themeTextMuted} font-mono`}>
+                      {en ? 'Trained LSTM Multi-Horizon Projections' : 'Proyeksi Multi-Horizon LSTM (Model Terlatih)'}
+                    </span>
+                    <span className="font-mono text-[10px] text-[#3B82F6] mt-0.5 tabular-nums truncate">
+                      {simLstmForecast
+                        ? `${simLstmForecast.modelMeta.sourceFile} · ${simLstmForecast.modelMeta.architecture} · ${simLstmForecast.modelMeta.totalParams.toLocaleString(en ? 'en-US' : 'id-ID')} params · MAE ${simLstmForecast.modelMeta.maeCm} cm`
+                        : en
+                          ? 'model_lstm_banjir.h5 · Start simulation to compute horizons...'
+                          : 'model_lstm_banjir.h5 · Mulai simulasi untuk menghitung proyeksi...'}
+                    </span>
+                  </div>
+
+                  {simLstmForecast && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] tabular-nums">
+                      <span className={themeTextMuted}>
+                        {en ? 'Window' : 'Jendela'} {simLstmForecast.inputCount}/24 · {simLstmForecast.inferenceMs.toFixed(1)} ms
+                      </span>
+                      <span
+                        className={`font-bold uppercase tracking-wider ${
+                          simLstmForecast.status === 'Bahaya'
+                            ? 'text-rose-400'
+                            : simLstmForecast.status === 'Siaga'
+                              ? 'text-amber-400'
+                              : 'text-emerald-400'
+                        }`}
+                      >
+                        {en ? `6h Outlook: ${localizedSimLstmStatus}` : `Proyeksi 6J: ${localizedSimLstmStatus}`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                  {[
+                    {
+                      label: 'Horizon T+30m',
+                      value: simLstmForecast?.prediction_30m,
+                      conf: simLstmForecast?.confidence_30m,
+                      accentText: 'text-[#3B82F6]',
+                    },
+                    {
+                      label: en ? 'Horizon T+1 Hour' : 'Horizon T+1 Jam',
+                      value: simLstmForecast?.prediction_1h,
+                      conf: simLstmForecast?.confidence_1h,
+                      accentText: 'text-[#3B82F6]',
+                    },
+                    {
+                      label: en ? 'Horizon T+3 Hours' : 'Horizon T+3 Jam',
+                      value: simLstmForecast?.prediction_3h,
+                      conf: simLstmForecast?.confidence_3h,
+                      accentText: 'text-violet-400',
+                    },
+                    {
+                      label: en ? 'Horizon T+6 Hours' : 'Horizon T+6 Jam',
+                      value: simLstmForecast?.prediction_6h,
+                      conf: simLstmForecast?.confidence_6h,
+                      accentText: 'text-amber-400',
+                    },
+                  ].map((card) => {
+                    const delta =
+                      simLstmForecast && typeof card.value === 'number'
+                        ? Math.round((card.value - simLstmForecast.currentLevel) * 10) / 10
+                        : null;
+                    const deltaColor =
+                      delta === null
+                        ? themeTextMuted
+                        : delta > 0.5
+                          ? 'text-amber-400'
+                          : delta < -0.5
+                            ? 'text-emerald-400'
+                            : themeTextMuted;
+
+                    return (
+                      <div
+                        key={card.label}
+                        className={`rounded-xl border p-3.5 flex flex-col justify-between ${
+                          isDark ? 'bg-white/[0.02] border-white/[0.06]' : 'bg-slate-50/80 border-slate-200/80'
+                        }`}
+                      >
+                        <div className={`flex justify-between items-center ${themeTextMuted} font-mono text-[9.5px] uppercase tracking-wider gap-1`}>
+                          <span className="truncate">{card.label}</span>
+                          <Clock className={`w-3.5 h-3.5 shrink-0 ${card.accentText}`} />
+                        </div>
+                        <div className="my-2 flex items-baseline justify-between gap-1.5 flex-wrap">
+                          <span className={`text-2xl sm:text-[26px] font-sans font-light tracking-tight tabular-nums ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                            {typeof card.value === 'number' ? card.value.toFixed(1) : '--'}
+                            <span className="text-[11px] font-normal text-slate-400 ml-1">cm</span>
+                          </span>
+                          {delta !== null && (
+                            <span className={`font-mono text-[10px] tabular-nums ${deltaColor}`}>
+                              {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} cm
+                            </span>
+                          )}
+                        </div>
+                        <div className={`text-[10px] font-mono tabular-nums flex items-center justify-between pt-2 border-t ${themeBorder}`}>
+                          <span className={themeTextMuted}>{en ? 'Confidence' : 'Keyakinan'}</span>
+                          <span className={`font-semibold ${card.accentText}`}>
+                            {typeof card.conf === 'number' ? `${card.conf}%` : '--%'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </section>
           )}

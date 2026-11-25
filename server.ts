@@ -645,14 +645,24 @@ function getCleanConditionIdFromWmo(code: number): string {
   return getWeatherCondition(code);
 }
 
+// In-memory live weather cache (3-minute fresh TTL per language; also serves stale snapshot on transient upstream timeout)
+const liveWeatherCache = new Map<string, { payload: Record<string, any>; cachedAt: number }>();
+const LIVE_WEATHER_TTL_MS = 3 * 60 * 1000;
+
 // Get live local weather directly from official BMKG Public API (with complete Open-Meteo fallback if BMKG returns empty data)
 app.get('/api/live-weather', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const isEn = (req.query.lang as string) === 'en' || (req.query.language as string) === 'en';
+  const forceRefresh = req.query.force === '1' || req.query.force === 'true';
+  const cacheKey = isEn ? 'en' : 'id';
+  const cached = liveWeatherCache.get(cacheKey);
+  if (!forceRefresh && cached && Date.now() - cached.cachedAt < LIVE_WEATHER_TTL_MS) {
+    return res.json(cached.payload);
+  }
+
   const fetchedAtWib = formatWibTime(new Date());
 
   // Official BMKG ADM4 endpoints for Beji, Kota Depok (Kukusan primary — field test site; Pondok Cina & Beji Timur fallback)
-  res.setHeader('Cache-Control', 'no-store');
   const bmkgUrls = [
     'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1002', // Kukusan (publik)
     'https://api-apps.bmkg.go.id/api/df/v1/forecast/adm?adm4=32.76.06.1002', // Kukusan (apps)
@@ -660,10 +670,13 @@ app.get('/api/live-weather', async (req, res) => {
     'https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=32.76.06.1006', // Beji Timur (fallback)
   ];
 
-  // Step 1: Fetch verbatim data directly from BMKG public API
+  // Step 1: Fetch verbatim data directly from BMKG public API (with bounded per-request timeout)
   for (const url of bmkgUrls) {
     try {
-      const bmkgRes = await fetch(url, { headers: { Accept: 'application/json' } });
+      const bmkgRes = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(4500),
+      });
       if (!bmkgRes.ok) continue;
 
       const bmkgData = await bmkgRes.json();
@@ -734,7 +747,7 @@ app.get('/api/live-weather', async (req, res) => {
         };
       });
 
-      return res.json({
+      const payload = {
         source: 'BMKG',
         adm4: lokasi.adm4 || '32.76.06.1002',
         location_name: locationName,
@@ -752,7 +765,9 @@ app.get('/api/live-weather', async (req, res) => {
         analysis_date: currentSlot.analysis_date || null,
         last_updated: fetchedAtWib,
         forecast_slots: upcomingSlots,
-      });
+      };
+      liveWeatherCache.set(cacheKey, { payload, cachedAt: Date.now() });
+      return res.json(payload);
     } catch (err) {
       console.warn(`[API] BMKG fetch failed for URL: ${url}`, err);
     }
@@ -762,7 +777,8 @@ app.get('/api/live-weather', async (req, res) => {
   try {
     console.warn('[API] BMKG endpoints returned empty cuaca[], falling back to Open-Meteo hourly + current.');
     const weatherRes = await fetch(
-      'https://api.open-meteo.com/v1/forecast?latitude=-6.3662&longitude=106.8186&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&hourly=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=2&wind_speed_unit=kmh&timezone=Asia/Jakarta'
+      'https://api.open-meteo.com/v1/forecast?latitude=-6.3662&longitude=106.8186&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility,cloud_cover&hourly=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m&forecast_days=2&wind_speed_unit=kmh&timezone=Asia/Jakarta',
+      { signal: AbortSignal.timeout(5000) }
     );
     if (weatherRes.ok) {
       const weatherData = await weatherRes.json();
@@ -833,7 +849,7 @@ app.get('/api/live-weather', async (req, res) => {
           }
         }
 
-        return res.json({
+        const payload = {
           source: 'Open-Meteo',
           adm4: '32.76.06.1002',
           location_name: 'Kukusan, Beji, Kota Depok',
@@ -851,11 +867,18 @@ app.get('/api/live-weather', async (req, res) => {
           analysis_date: null,
           last_updated: fetchedAtWib,
           forecast_slots: upcomingSlots,
-        });
+        };
+        liveWeatherCache.set(cacheKey, { payload, cachedAt: Date.now() });
+        return res.json(payload);
       }
     }
   } catch (err) {
     console.warn('[API] Open-Meteo fallback failed:', err);
+  }
+
+  // If we have a previously fetched real snapshot, return it instead of failing hard during transient upstream outage
+  if (cached) {
+    return res.json(cached.payload);
   }
 
   // Never invent fake weather numbers if both upstream services fail

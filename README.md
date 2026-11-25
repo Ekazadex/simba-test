@@ -1,250 +1,303 @@
-# 🌊 SIMBA — Sistem Informasi & Monitoring Banjir Berbasis IoT SCADA
+# 🌊 SIMBA — Sistem Prediksi Elevasi Air Sungai Berbasis Deep Learning & Web SCADA
 
-Sistem monitoring tinggi muka air (TMA) dan peringatan dini banjir (*Early Warning System*) berbasis **Internet of Things (IoT)**, telemetri real-time **SCADA**, dan integrasi kecerdasan buatan (**AI Predictive Evacuation**).
+> **Sistem Prediksi Elevasi Air Sungai Berbasis Deep Learning Menggunakan Fusi Data Sensor Ultrasonik dan Prakiraan Cuaca BMKG Terintegrasi Web SCADA**  
+> **Capstone Project — Kelompok 12**
+
+[![Frontend](https://img.shields.io/badge/Frontend-React%2019%20%2B%20TypeScript%20%2B%20Three.js-3B82F6?style=flat-square)](#stack-teknologi-aplikasi)
+[![Backend](https://img.shields.io/badge/Backend-Express%20%2B%20Firebase%20Firestore-F59E0B?style=flat-square)](#arsitektur-sistem-4-lapisan)
+[![AI%20%26%20ML](https://img.shields.io/badge/Deep%20Learning-LSTM%20%2B%20Gemini%20AI-8B5CF6?style=flat-square)](#model-deep-learning-lstm)
+[![Hardware](https://img.shields.io/badge/IoT%20Node-ESP32%20WROOM%20%2B%20JSN--SR04T-10B981?style=flat-square)](#1-perangkat-keras-hardware--realisasi-node-iot)
 
 ---
 
-## 📁 Struktur Repositori & Pemisahan Tim (Frontend vs Backend)
+## 📌 Latar Belakang & Solusi
 
-Untuk mempermudah kolaborasi pengembangan dan penilaian Capstone Project, repositori ini memisahkan subsistem **Frontend (Eka)** dan **Backend (Iqbal)** secara terstruktur:
+Indonesia menghadapi ancaman banjir berskala besar setiap tahunnya. Berdasarkan data BNPB 2024:
+- **1.420** kejadian banjir sepanjang tahun 2024
+- **109,6 juta** jiwa terpapar risiko banjir (lebih dari sepertiga penduduk Indonesia)
+- **49,77 juta hektar** luas wilayah bahaya banjir nasional
+- **489** korban jiwa akibat bencana banjir sepanjang 2024
+
+**SIMBA** hadir sebagai solusi *Early Warning System* (EWS) drainase dan sungai koridor **Depok–Jakarta (DAS Ciliwung)** berbiaya terjangkau (estimasi prototipe ~Rp 1,1 juta/node, jauh di bawah sensor radar/LiDAR konvensional bernilai puluhan hingga ratusan juta per titik) yang memadukan tiga pilar utama:
+1. **Fusi Data Sensor & Cuaca** — Menggabungkan pembacaan jarak permukaan air (**JSN-SR04T**), deteksi kondisi basah (**Capacitive Soil Moisture Sensor V1.2**), dan prakiraan cuaca aktual **API BMKG**.
+2. **Prediksi Deep Learning LSTM** — Memprediksi tren elevasi air multi-horizon (**T+30 menit, T+1 Jam, T+3 Jam, dan T+6 Jam**) untuk memberikan *lead time* evakuasi bagi warga dan BPBD.
+3. **Web SCADA Real-Time & Simulasi 3D** — Dashboard monitoring langsung dari *smartphone*/browser tanpa instalasi aplikasi, dilengkapi status **Normal / Siaga / Bahaya**, deteksi alat *offline*, asisten AI **Gemini**, serta simulasi visual **3D/2D DAS Ciliwung** dan jaringan sensor **CupCarbon**.
+
+---
+
+## 🏗️ Arsitektur Sistem (4 Lapisan)
 
 ```text
-SIMBA-SCADA/
-│
-├── 🎨 FRONTEND SUBSYSTEM (PIC: Eka)
-│   ├── src/                          # Seluruh Source Code Antarmuka Pengguna
-│   │   ├── components/               # Komponen Modular React SCADA
-│   │   │   ├── SCADADashboard.tsx    # Dashboard Utama (Gauge, Chart, Status RTU)
-│   │   │   └── AdminPanel.tsx        # Panel Kontrol & Kalibrasi Ambang Batas
-│   │   ├── firebaseConfig.ts         # Client SDK Listener Firestore
-│   │   ├── types.ts                  # Interface & Model Data TypeScript
-│   │   ├── index.css                 # Styling Global Tailwind CSS
-│   │   ├── App.tsx                   # Root Component & Navigasi
-│   │   ├── main.tsx                  # React DOM Entry Point
-│   │   └── README.md                 # Dokumentasi Khusus Frontend
-│   ├── public/                       # Aset Statis (Audio Alarm Siaga/Bahaya, Ikon)
-│   └── index.html                    # Single Page Application HTML Entry Point
-│
-├── 🖥️ BACKEND & CLOUD SUBSYSTEM (PIC: Iqbal)
-│   ├── server.ts                     # Entry Point Server Express & REST API
-│   ├── backend/                      # Dokumentasi & Modul Servis Backend
-│   │   └── README.md                 # Spesifikasi REST API & Arsitektur Server
-│   ├── firebase-applet-config.json   # Kredensial Database Cloud Firestore
-│   ├── firestore.rules               # Security Rules & Hak Akses Database
-│   └── .env.example                  # Konfigurasi Variabel Lingkungan & API Key
-│
-└── ⚙️ KONFIGURASI PROYEK (Shared)
-    ├── package.json                  # Dependensi Fullstack & Script Build
-    ├── tsconfig.json                 # Konfigurasi Compiler TypeScript
-    ├── vite.config.ts                # Bundler & Build Optimizer
-    └── README.md                     # Dokumentasi Utama Proyek
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 1. SENSOR LAYER (Lapangan)                                                 │
+│    • JSN-SR04T (Waterproof Ultrasonic IP67, 20–450 cm)                     │
+│    • Capacitive Soil Moisture Sensor V1.2 (Deteksi Basah/Kering)           │
+└────────────────────────────────────┬───────────────────────────────────────┘
+                                     ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 2. PROCESSING & EDGE LAYER (Node RTU)                                      │
+│    • ESP32 WROOM (Wi-Fi 2.4 GHz, ULP Deep Sleep)                           │
+│    • Median Filter (N=5) → Buffer 360 Sampel (~6 menit) di LittleFS        │
+│    • Daya: Baterai Li-Ion 4S (14,8 V) + Buck Converter LM2596 (5,05 V)     │
+└────────────────────────────────────┬───────────────────────────────────────┘
+                                     ▼ (Batch Upload via Wi-Fi / HTTPS)
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 3. CLOUD, BACKEND & AI LAYER                                               │
+│    • Firebase Firestore (sensor_readings, system_config, system_logs,      │
+│      bmkg_forecast, predictions)                                           │
+│    • Backend Express + TypeScript (Kalibrasi, Batch Ingest, BMKG Cache)    │
+│    • Model Deep Learning LSTM (model_lstm_banjir.h5) + Gemini AI           │
+│    • Engine Simulasi 9-Node DAS Ciliwung & CupCarbon Telemetry (Port 5005) │
+└────────────────────────────────────┬───────────────────────────────────────┘
+                                     ▼ (Realtime Snapshot + REST/SSE)
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 4. PRESENTATION LAYER (Web SCADA SIMBA)                                    │
+│    • Dashboard SCADA Live (Grafik Recharts, 4-Horizon LSTM, Cuaca BMKG)    │
+│    • Simulasi 3D Interaktif (Three.js N1–N5) & Peta Koridor 2D (9 Node)    │
+│    • Panel Admin PLC (Threshold Siaga/Bahaya, Kalibrasi, Simulasi Uji)     │
+│    • Bilingual ID/EN, Dark/Light Mode, Alarm Audio Darurat (Web Audio API) │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📋 1. Bidang Hardware (Perangkat Keras & Komponen)
+## 👥 Tim Pengembang — Kelompok 12
 
-### A. Bill of Materials (BoM) & Spesifikasi Komponen
+| Nama Anggota | Fokus Kontribusi Utama |
+|---|---|
+| **Ekananda Zhafif Dean** | Lead Frontend Web SCADA, Dashboard UI/UX, Grafik LSTM, & Integrasi Web |
+| **Muhammad Iqbal Alfajri** | Lead Backend Server (Express/TS), Cloud Firebase Firestore, API & Integrasi Hardware |
+| **Naufal Hani Zakwan** | Simulasi 3D DAS Ciliwung (Three.js 5 Node N1–N5) & Simulasi Jaringan CupCarbon (9 Node) |
+| **Mikhail Ayares** | Perancangan & Pengembangan Sistem Hardware/IoT & Integrasi Proyek |
+| **Radithya Fawwaz Syahdi** | Perancangan Sistem, Analisis Data, & Pengujian Proyek |
 
-| No | Nama Komponen | Spesifikasi / Model | Fungsi dalam Sistem | Status / Ketersediaan |
-|---|---|---|---|---|
-| 1 | **Mikrokontroler (RTU)** | **ESP32 DevKit V1 (30-pin / 38-pin)**<br>- Dual Core Tensilica 240 MHz<br>- Built-in Wi-Fi 2.4 GHz & BLE<br>- Flash Memory 4MB | Membaca data sensor, melakukan kalkulasi ketinggian air, mengendalikan aktuator alarm lokal, dan mentransmisikan data ke Firebase via HTTPS/REST. | Tersedia (Ready) |
-| 2 | **Sensor Jarak Air (TMA)** | **JSN-SR04T Waterproof Ultrasonic Sensor**<br>- Jarak ukur: 20 cm s/d 450 cm (4.5 m)<br>- Tegangan kerja: 5V DC<br>- Transduser kedap air (IP67) | Mengukur jarak antara sensor (posisi di atas jembatan/tiang) ke permukaan air sungai secara *contactless* dan tahan cuaca. | Tersedia (Ready) |
-| 3 | **Sensor Suhu & Kelembaban** | **DHT22 / AM2302 Sensor**<br>- Range suhu: -40°C ~ 80°C (akurasi ±0.5°C)<br>- Range RH: 0-100% | Mengukur suhu ambien untuk kompensasi otomatis kecepatan rambat gelombang ultrasonik di udara ($v = 331.4 + 0.6 \times T$). | Tersedia (Ready) |
-| 4 | **Indikator Audio (Buzzer/Sirine)** | **Active Buzzer 5V / Mini Siren Alarm DC 12V** | Memberikan bunyi peringatan dini secara fisik di titik pantau RTU saat status air mencapai ambang **Siaga** atau **Bahaya**. | Tersedia (Ready) |
-| 5 | **Indikator Visual (LED)** | **LED Indicator Tri-Color (Hijau, Kuning, Merah)** + Resistor 220Ω | Indikator visual langsung status level air di box panel RTU (Hijau = Normal, Kuning = Siaga, Merah = Bahaya). | Tersedia (Ready) |
-| 6 | **Modul Driver Aktuator** | **Relay Module 1-Channel 5V Optocoupler** | Mengisolasi dan memicu penyalaan sirine berdaya tinggi (12V) secara aman dari pin GPIO mikrokontroler 3.3V/5V. | Tersedia (Ready) |
-| 7 | **Sistem Catu Daya (Power)** | **Power Supply Adaptor DC 5V/2A atau 12V/2A** + **Step-Down Buck Converter (LM2596)** | Menyuplai daya stabil ke ESP32, sensor ultrasonik, dan sirine dari sumber listrik 220V AC atau aki/baterai Li-Ion 18650. | Tersedia (Ready) |
-| 8 | **Enclosure / Casing** | **Waterproof Junction Box Box Panel IP65/IP66 (Ukuran 150x100x70 mm)** | Melindungi rangkaian mikrokontroler, modul converter, dan kabel dari cipratan air, hujan, dan debu luar ruangan. | Siap Fabrikasi |
-| 9 | **Aksesoris & Mekanik** | - Bracket Sensor Akrilik / Plat Besi L<br>- Kabel Shielded 3-Core / 4-Core<br>- PCB Dot Matrix / Terminal Screw Block | Dudukan sensor menghadap tegak lurus permukaan air dan mempermudah perapihan jalur kabel instalasi lapangan. | Tersedia (Ready) |
+---
 
-### B. Diagram Pinout & Pengkabelan (Wiring Diagram)
+## 📁 Struktur Repositori
 
 ```text
-       ┌────────────────────────────────────────────────────────┐
-       │                      ESP32 DEVKIT                      │
-       │                                                        │
-       │    [VIN / 5V] ───────────────┬────── VCC (JSN-SR04T)   │
-       │    [GND]      ───────────────┼────── GND (JSN-SR04T)   │
-       │    [GPIO 5]   ───────────────┴────── TRIG (JSN-SR04T)  │
-       │    [GPIO 18]  ────────────────────── ECHO (JSN-SR04T)  │
-       │                                                        │
-       │    [3V3]      ────────────────────── VCC (DHT22)       │
-       │    [GND]      ────────────────────── GND (DHT22)       │
-       │    [GPIO 4]   ────────────────────── DATA (DHT22)      │
-       │                                                        │
-       │    [GPIO 19]  ────────────────────── Relay / Buzzer IN │
-       │    [GPIO 21]  ────────────────────── LED Kuning (Siaga)│
-       │    [GPIO 22]  ────────────────────── LED Merah (Bahaya)│
-       │    [GPIO 23]  ────────────────────── LED Hijau (Normal)│
-       └────────────────────────────────────────────────────────┘
+SIMBA/
+├── 🎨 FRONTEND SUBSYSTEM (src/)
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── SCADADashboard.tsx           # Dashboard SCADA Live, Grafik Aktual+LSTM, Cuaca BMKG, AI
+│   │   │   ├── AdminPanel.tsx               # Panel Kontrol PLC, Kalibrasi Referensi & Threshold
+│   │   │   ├── CiliwungSimulationPage.tsx   # Halaman Simulasi 9-Node (Peta 3D/2D & Grafik LSTM)
+│   │   │   ├── CiliwungOfficial3DView.tsx   # Visualisasi 3D Sungai Ciliwung (Three.js N1–N5)
+│   │   │   ├── CiliwungHardwareLiveView.tsx # Peta Koridor 2D Leaflet & Tampilan Sensor Live
+│   │   │   ├── Ciliwung3DMap.tsx            # Komponen Peta 3D Interaktif
+│   │   │   └── Ciliwung3DViewer.tsx         # Viewport Render 3D
+│   │   ├── ciliwung3d/ & lib/ciliwung3d/    # Modul Terrain, River, Floodplain, & Sensor Node 3D
+│   │   ├── ml/
+│   │   │   ├── lstmEngine.ts                # Forward-pass Engine Model LSTM (T+30m, 1J, 3J, 6J)
+│   │   │   └── lstmModelWeights.json        # Bobot Terlatih dari model_lstm_banjir.h5
+│   │   ├── utils/                           # Alarm Audio (Web Audio), API Base, Normalisasi Data
+│   │   ├── firebaseConfig.ts                # Inisialisasi Firebase Client SDK (Realtime Listener)
+│   │   ├── types.ts                         # Interface & Model Data Telemetri TypeScript
+│   │   ├── App.tsx                          # Root Layout, Navigasi, Bahasa (ID/EN), Tema (Dark/Light)
+│   │   └── README.md                        # Dokumentasi Khusus Frontend
+│   ├── public/                              # Aset Statis & Audio Alarm Siaga/Bahaya
+│   └── index.html                           # SPA Entry Point
+│
+├── 🖥️ BACKEND & SIMULATION SUBSYSTEM (server.ts & backend/)
+│   ├── server.ts                            # Server Express + TypeScript, REST API & Vite Middleware
+│   ├── backend/
+│   │   ├── ciliwung/
+│   │   │   ├── ciliwung-api.mjs             # REST & SSE API Simulasi 9-Node DAS Ciliwung
+│   │   │   ├── simulation-engine.mjs        # Engine Propagasi Hidrologi 9 Stasiun (UP1 → N5)
+│   │   │   ├── cupcarbon-telemetry.mjs      # Bridge Telemetri CupCarbon (Logger Port 5005)
+│   │   │   ├── rain-replay.mjs              # Mode Replay Episode Hujan 24 Jam
+│   │   │   ├── forecast-worker.mjs          # Worker Proyeksi & Forecast UDP
+│   │   │   ├── hardware-live.mjs            # Sinkronisasi Data Hardware Lapangan
+│   │   │   └── weather-context.mjs          # Konteks Prakiraan Cuaca DAS Ciliwung
+│   │   └── README.md                        # Dokumentasi Khusus Backend & REST API
+│   ├── firebase-blueprint.json              # Skema Koleksi & Entitas Firestore
+│   ├── firestore.rules                      # Aturan Keamanan Firebase Firestore
+│   └── .env.example                         # Template Environment Variables
+│
+└── ⚙️ KONFIGURASI PROYEK
+    ├── package.json                         # Dependensi & Script Build/Dev/Lint
+    ├── tsconfig.json                        # Konfigurasi TypeScript
+    ├── vite.config.ts                       # Bundler Vite
+    ├── vercel.json                          # Konfigurasi Deployment Frontend
+    └── README.md                            # Dokumentasi Utama Proyek (File ini)
 ```
 
 ---
 
-## 💻 2. Bidang Software (Perangkat Lunak, Database & Tools)
+## 🔌 1. Perangkat Keras (Hardware) & Realisasi Node IoT
 
-### A. Daftar Tool & Lingkungan Pengembangan (Development Environment)
+### A. Komponen Terrealisasi (Node Final)
 
-| Komponen Software | Tool / Teknologi | Fungsi / Keterangan |
+| Kategori | Komponen Final | Spesifikasi & Fungsi |
 |---|---|---|
-| **Code Editor / IDE** | **Visual Studio Code (VS Code)** | Editor utama penulisan kode frontend, backend server, konfigurasi database, dan dokumentasi. |
-| **Firmware IDE** | **Arduino IDE 2.x / PlatformIO** | Menulis, mengompilasi, dan mengunggah kode firmware C/C++ ke mikrokontroler ESP32. |
-| **Runtime Environment** | **Node.js (v20+ / v22+) & npm** | Lingkungan eksekusi runtime JavaScript/TypeScript server backend dan dependency manager. |
-| **TypeScript Engine** | **TSX (`tsx`) & esbuild** | Menjalankan TypeScript server secara langsung tanpa pre-compilation lambat serta bundling production super cepat. |
-| **Version Control** | **Git & GitHub** | Manajemen repositori, pelacakan histori revisi kode, dan kolaborasi tim proyek. |
+| **Mikrokontroler & Komunikasi** | **ESP32 WROOM** | Membaca sensor, menjalankan median filter, buffer memori flash (**LittleFS**), mode **ULP Deep Sleep**, dan mengirim batch data via **Wi-Fi (10–20 Mbps)** ke Firebase. |
+| **Sensor Jarak Air (TMA)** | **JSN-SR04T** | Sensor ultrasonik *waterproof* (**IP67**) dengan jangkauan ukur **20–450 cm** untuk mengukur jarak ke permukaan air secara *contactless*. |
+| **Sensor Kondisi Basah/Kering** | **Capacitive Soil Moisture Sensor V1.2** | Sensor kapasitif tahan korosi yang dipantau secara kontinu saat ULP *deep sleep* untuk mendeteksi kondisi basah/hujan sebelum membangunkan Wi-Fi. |
+| **Catu Daya & Regulasi** | **Baterai Li-Ion 4S (14,8 V)** + **Buck Converter (LM2596)** | Menurunkan tegangan baterai 4 sel seri 14,8 V menjadi **5 V (5,05 V terukur)** yang stabil bagi ESP32 WROOM dan sensor ultrasonik. |
 
-### B. Stack Teknologi Aplikasi (Web SCADA & Backend)
+### B. Deviasi Komponen (Rencana Awal vs. Realisasi Final)
 
-| Lapisan (Layer) | Teknologi / Pustaka | Peran dalam Sistem SIMBA |
+| Aspek | Rencana Awal | Realisasi Final | Alasan Perubahan Teknis |
+|---|---|---|---|
+| **Deteksi Hujan / Basah** | Sensor hujan resistif **FC-37** | **Capacitive Soil Moisture Sensor V1.2** | Sensor kapasitif tidak memiliki elektroda terbuka yang mudah berkarat di lingkungan lembap dan telah tersedia sejak Pekan 2. |
+| **Mikrokontroler** | **Arduino Mega 2560** + **ESP32 DOIT** + Level Shifter | **ESP32 WROOM** tunggal | ESP32 DOIT rusak saat uji coba; satu ESP32 WROOM sudah cukup untuk membaca sensor dan mengirim data sehingga level shifter 5V→3,3V dan UART antar-board dapat dihilangkan. |
+| **Sensor Suhu/Kelembaban** | **DHT22** | *Dihilangkan dari node final* | Penyederhanaan rangkaian node lapangan; konteks suhu/cuaca diambil dari API **BMKG** yang di-cache. |
+| **Konektivitas** | Modul seluler **SIM7600 / SIM7670C 4G LTE** | **Wi-Fi (built-in ESP32)** | Modul SIM yang tersedia hanya mendukung 2G dan gagal terhubung saat troubleshooting, serta memakan ~60% anggaran. Wi-Fi cukup untuk payload batch kecil tanpa biaya pulsa/paket data. |
+
+### C. Diagram Pinout Node Final (`ESP32 WROOM`)
+
+```text
+       ┌─────────────────────────────────────────────────────────────┐
+       │                        ESP32 WROOM                          │
+       │                                                             │
+       │   [5V (Buck 5.05V)] ──────────┬───── VCC (JSN-SR04T)        │
+       │   [GND]             ──────────┼───── GND (JSN-SR04T)        │
+       │   [GPIO 5]          ──────────┼───── TRIG (JSN-SR04T)       │
+       │   [GPIO 18]         ──────────┴───── ECHO (JSN-SR04T)       │
+       │                                                             │
+       │   [3V3]             ──────────┬───── VCC (Capacitive Soil)  │
+       │   [GND]             ──────────┼───── GND (Capacitive Soil)  │
+       │   [GPIO 34 (ADC)]   ──────────┴───── AOUT (Capacitive Soil) │
+       └─────────────────────────────────────────────────────────────┘
+```
+
+### D. Alur Firmware & Pengujian Lapangan
+Firmware dikembangkan di **Arduino IDE** (`ESP32_Firebase_WiFi_JSNSensor_Deepsleep`):
+1. **Monitoring ULP Deep Sleep**: Capacitive soil sensor (`GPIO34`) dipantau terus saat ESP32 berada pada mode hemat daya (*deep sleep*).
+2. **Pembacaan & Filtering**: JSN-SR04T (`GPIO5` / `GPIO18`) membaca jarak ke permukaan air dengan **Median Filter (N=5)** untuk meredam *noise* hujan, angin, dan busa.
+3. **Batch Sampling (LittleFS)**: ESP32 mengumpulkan **360 sampel** berisi `distance` dan `timestamp` (setara **±6 menit** pengukuran) lalu menyimpannya sementara di memori flash **LittleFS**.
+4. **Upload Kondisional via Wi-Fi**: Wi-Fi dan koneksi ke Firebase Firestore (`sensor_readings`) / backend (`POST /api/telemetry/batch`) dijalankan saat kondisi basah terdeteksi, kemudian kembali ke *deep sleep* saat kondisi kering.
+
+---
+
+## 🧠 2. Model Deep Learning LSTM & Data Pipeline
+
+Pipeline pengolahan data di sisi cloud dan engine prediksi:
+1. Backend memvalidasi batch telemetri dari node, mengoreksi jarak terhadap kecepatan rambat suara ($v = 331.3 + 0.606 \times T$), dan menghitung elevasi air ($\text{Elevasi} = \text{Tinggi Referensi} - \text{Jarak Terkoreksi}$).
+2. Data disimpan di **Firebase Firestore** bersama *snapshot* prakiraan cuaca **BMKG** yang di-cache.
+3. **Model LSTM Terlatih (`model_lstm_banjir.h5`)** memproses *time-series* elevasi air (jendela *lookback* 24 langkah) untuk menghasilkan proyeksi multi-horizon deterministik dengan latensi **10–100 ms**:
+   - **Arsitektur**: `Sequential(Input(24,1) → LSTM(64, return_sequences) → LSTM(32) → Dense(16) → Dense(1))`
+   - **Parameter Terlatih**: `29.857` parameter (*trained on 46.728 samples*, *MinMaxScaler*)
+   - **Metrik Validasi**: **MAE 2,86 cm** | **RMSE 7,40 cm** (target sistem RMSE < 5 cm pada kalibrasi lanjutan dengan data lapangan)
+   - **Output**: Prediksi elevasi **T+30 menit, T+1 Jam, T+3 Jam, T+6 Jam**, status **Normal / Siaga / Bahaya**, dan *confidence score*.
+
+---
+
+## 🌐 3. Fitur Utama Web SCADA SIMBA & Simulasi
+
+### A. Dashboard SCADA Live & Admin Panel
+- **Monitoring Real-Time**: Elevasi air drainase/sungai Depok–Jakarta live dari Firebase Firestore, dapat diakses langsung dari *smartphone* tanpa instalasi aplikasi.
+- **Grafik Aktual & Prediksi LSTM 4 Horizon**: Visualisasi terpadu menggunakan Recharts lengkap dengan garis batas **Siaga** (default `≥ 60 cm`) dan **Bahaya** (default `≥ 90 cm`), serta deteksi otomatis ketika perangkat ESP32 *offline* / data lama (*stale*).
+- **Konteks Cuaca BMKG & Asisten AI**: Menampilkan prakiraan curah hujan aktual BMKG yang di-cache di Firebase serta analisis kondisi berbasis **Gemini AI** (`@google/genai`).
+- **Panel Admin PLC**: Pengaturan ambang batas Siaga/Bahaya dinamis, kalibrasi tinggi referensi sensor, injeksi simulasi uji, dan audit log sistem.
+- **Pengalaman Multi-Perangkat**: Mendukung mode gelap/terang (*Dark/Light Mode*), alih bahasa **Indonesia / Inggris (ID/EN)**, dan alarm suara interaktif (Web Audio API).
+
+### B. Simulasi 3D/2D DAS Ciliwung & CupCarbon
+- **Visualisasi 3D Interaktif (Three.js)**: Menampilkan sungai Ciliwung 3D dengan **5 titik sensor utama (`N1`–`N5`)** hingga muara Laut Jawa sehingga warga dan petugas BPBD dapat memahami kedekatan air dengan batas aman secara visual, bukan sekadar angka mentah.
+- **Peta Koridor 2D & Propagasi 9 Node (`UP1` → `N5`)**: Mensimulasikan propagasi banjir dari hulu **UP1 Puncak** hingga **N5 Manggarai** untuk skenario **Hujan Ringan, Sedang, Lebat**, serta mode **Replay Episode 24 Jam**.
+- **Grafik & Prediksi LSTM per Node**: Tab grafik pada halaman simulasi juga terintegrasi dengan engine LSTM terlatih untuk memproyeksikan elevasi **T+30m, 1 Jam, 3 Jam, dan 6 Jam** pada setiap node yang dipilih.
+- **Simulasi Jaringan CupCarbon**: Pemodelan 9 node sensor sepanjang Sungai Ciliwung menggunakan skrip Python yang mengirim data TMA ke logger (**port 5005**) dan merekap status (`AMAN`, `SIAGA`, `BAHAYA`) ke `rekap_banjir.csv` untuk menguji keandalan komunikasi dan *duty cycle* sebelum pemasangan lapangan.
+
+---
+
+## 💻 4. Stack Teknologi Aplikasi
+
+| Lapisan | Teknologi / Pustaka | Peran dalam Sistem |
 |---|---|---|
-| **Frontend Framework** | **React 19 + Vite 6** | Framework antarmuka komponen reaktif, modern, dan berkinerja tinggi. |
-| **Language** | **TypeScript (~5.8)** | Menjamin keamanan tipe data (type-safety) pada data telemetri hidrologi dan konfigurasi SCADA. |
-| **Styling & UI** | **Tailwind CSS v4** | Desain dashboard modern industrial SCADA, mode gelap (*Dark Mode*) & terang (*Light Mode*), serta responsive layout. |
-| **Iconography** | **Lucide React** | Ikon visual telemetri (sensor, radar, sirene, water drop, cloud weather, terminal, lock). |
-| **Data Visualization** | **Recharts & HTML5 Canvas** | Menampilkan grafik tren kenaikan air 24 jam, batas ambang Siaga/Bahaya, dan visualisasi hidrograf sungai. |
-| **Immersive Alarm** | **Web Audio API** | Audio reactive visualizer dan alarm loop darurat terintegrasi pada status Siaga dan Bahaya. |
-| **Backend Server** | **Express.js (Node.js)** | Menyediakan REST API: simulasi hidrologi mandiri (`/api/sim-data`), crawling cuaca/berita (`/api/search-news`), dan prediksi bencana. |
-| **Cloud Database** | **Google Firebase Firestore** | Database NoSQL real-time cloud untuk sinkronisasi seketika antara RTU ESP32, Dashboard SCADA, dan Admin Panel. |
-| **Weather Telemetry** | **Open-Meteo API** | Mengambil data cuaca, probabilitas presipitasi, dan curah hujan aktual di DAS sungai yang dimonitor. |
-| **Kecerdasan Buatan** | **Google Gemini AI SDK (`@google/genai`)** | Asisten cerdas pembuat prediksi hidrologi, estimasi debit banjir, dan rekomendasi langkah evakuasi BPBD. |
+| **Frontend** | **React 19 + TypeScript 5.8 + Vite 6** | Antarmuka Web SCADA reaktif, *type-safe*, dan cepat. |
+| **Styling & Ikon** | **Tailwind CSS v4 + Lucide React** | UI industrial SCADA responsif (Desktop/Mobile, Dark/Light, ID/EN). |
+| **Visualisasi 2D/3D** | **Recharts, Three.js, Leaflet, MapLibre GL** | Kurva elevasi+LSTM, simulasi sungai 3D Ciliwung, dan peta koridor 2D. |
+| **Audio Alert** | **Web Audio API** | Alarm suara darurat otomatis saat status **Siaga** atau **Bahaya**. |
+| **Backend Server** | **Express.js + TypeScript (`tsx` / `esbuild`)** | REST API telemetri, batch ingest, cache cuaca BMKG, simulasi Ciliwung, dan proxy AI. |
+| **Cloud Database** | **Firebase Firestore** | Sinkronisasi data real-time antara node ESP32, backend, dan web dashboard. |
+| **Deep Learning & AI** | **Trained LSTM (`model_lstm_banjir.h5`) + `@google/genai`** | Prediksi elevasi time-series 30m–6J dan asisten interpretasi kondisi banjir. |
 
 ---
 
-## ⚙️ 3. Konfigurasi Lingkungan Pengembangan (Setup Guide)
+## 🛡️ 5. Kendala Sistem, Metodologi & Anggaran
 
-### Prasyarat:
-1. Pastikan sudah menginstal **Node.js (versi 20 atau lebih baru)**:
-   ```bash
-   node -v
-   npm -v
-   ```
-2. Pastikan sudah menginstal **Git**:
-   ```bash
-   git --version
-   ```
+### Kendala & Keputusan Desain
+| Kendala | Solusi Desain yang Diterapkan |
+|---|---|
+| *Noise* sensor akibat hujan, angin, dan busa permukaan air | Penerapan **Median Filter (N=5)** di firmware ESP32 |
+| Keterbatasan data historis AWLR lokal | Penggunaan **ground truth sintetis berbasis HEC-RAS** untuk training/validasi |
+| API BMKG tanpa jaminan SLA | **Caching prakiraan cuaca di Firebase Firestore** dengan *fallback* |
 
-### Langkah Instalasi & Menjalankan Proyek:
+### Metodologi Pengembangan (14 Minggu — Prototipe Iteratif & CPM)
+1. **Tahap 1 — Persiapan & Hardware**: Studi literatur, pengadaan, perakitan node sensor, dan pengujian konektivitas.
+2. **Tahap 2 — Pipeline Cloud**: Otomasi pipeline pengiriman batch data dari ESP32 ke Firebase Firestore.
+3. **Tahap 3 — Data Engineering & LSTM**: Pelatihan dan validasi model LSTM berbasis skenario hidrologi HEC-RAS.
+4. **Tahap 4 — Integrasi & Stress Test**: Integrasi end-to-end Web SCADA, Simulasi 3D/CupCarbon, dan pengujian keandalan.
 
-1. **Clone Repositori:**
-   ```bash
-   git clone https://github.com/username-anda/simba-scada-flood-monitoring.git
-   cd simba-scada-flood-monitoring
-   ```
+### Ringkasan Anggaran & Daya (Baseline Proposal)
+- **RAB Prototipe Awal**: **Rp 1.133.000** (di bawah batas Rp 2.000.000/unit) — Elektronik Rp 598.000, Habis Pakai Rp 485.000, Komunikasi Rp 50.000. *(RAB final & perhitungan daya ulang untuk node ESP32 WROOM tanpa modul SIM menyusul).*
+- **Baseline Daya Awal**: Target minimum 8 jam *runtime* (perhitungan rencana awal mencapai ~84,47 jam dengan siklus aktif 10 dtk / *deep sleep* 290 dtk).
 
-2. **Instalasi Dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Konfigurasi Environment Variable (`.env`):**
-   Buat file `.env` di direktori root dengan menyalin template:
-   ```env
-   # Google Gemini AI API Key (untuk fitur Analisis Prediksi Hidrologi)
-   GEMINI_API_KEY=your_gemini_api_key_here
-
-   # (Opsional) Port Server (Default: 3000)
-   PORT=3000
-   ```
-
-4. **Menjalankan Server Pengembangan (Dev Server):**
-   ```bash
-   npm run dev
-   ```
-   Aplikasi akan berjalan di: `http://localhost:3000`
-
-5. **Build untuk Production:**
-   ```bash
-   npm run build
-   npm start
-   ```
+### Rencana Pengembangan Lanjutan
+- Pengembangan arsitektur LSTM secara menyeluruh menggunakan histori data lapangan kontinu.
+- Penyatuan penuh antara visualisasi Simulasi 3D, jaringan CupCarbon, dan node sensor fisik lapangan secara *live*.
 
 ---
 
-## 🗄️ 4. Struktur Koleksi Database (Firebase Firestore)
+## ⚙️ 6. Panduan Instalasi & Menjalankan Proyek
 
-Sistem SIMBA menggunakan struktur koleksi Firestore berikut:
+### Prasyarat
+- **Node.js v20+** dan **npm**
+- **Git**
 
-- **`sensor_readings`**: Riwayat rekaman sensor (timestamp, water_level, distance, temperature, humidity, alert_status).
-- **`system_config`**: Parameter operasional SCADA (reference_height, threshold_siaga, threshold_bahaya, status_alat, auto_simulation, simulation_mode).
-- **`system_logs`**: Log aktivitas, log peringatan RTU, dan status kalibrasi sensor.
-- **`scada_credentials`**: Akses keamanan dan otentikasi login Admin SCADA.
+### Langkah Cepat
+```bash
+# 1. Clone repositori
+git clone https://github.com/Ekazadex/SIMBA.git
+cd SIMBA
 
----
+# 2. Instal seluruh dependensi
+npm install
 
-## 📡 5. Dokumentasi REST API Integrasi Hardware (ESP32 / RTU)
+# 3. Salin dan isi environment variables
+cp .env.example .env
+# Isi GEMINI_API_KEY dan kredensial Firebase jika diperlukan
 
-Aplikasi SIMBA menyediakan endpoint REST API terpadu agar mikrokontroler (ESP32 / Arduino / Raspberry Pi) dapat bertukar data dan tersinkronisasi secara real-time:
-
-### A. Kirim Telemetri Sensor (`POST /api/telemetry`)
-Mengirim pembacaan sensor JSN-SR04T & DHT22 dari lapangan ke server SCADA.
-
-* **Endpoint:** `POST /api/telemetry` (atau `/api/sensor-data`)
-* **Headers:** `Content-Type: application/json`
-* **Request Body (JSON):**
-```json
-{
-  "node_id": "node-kukusan-01",
-  "distance": 185.5,
-  "temperature": 29.4,
-  "humidity": 72.0,
-  "local_rain": 0
-}
-```
-*(Catatan: Anda cukup mengirim `distance` (jarak pantul pantulan sensor ke air dalam cm), server akan otomatis menghitung elevasi air dengan formula kompensasi suhu $v = 331.3 + 0.606 \times T$).*
-
-* **Response (JSON):**
-```json
-{
-  "success": true,
-  "timestamp": 1725324500000,
-  "node_id": "node-kukusan-01",
-  "water_level": 114.5,
-  "alert_status": "Bahaya",
-  "should_alarm": true,
-  "alarm_type": "Bahaya",
-  "threshold_siaga": 60,
-  "threshold_bahaya": 90,
-  "sampling_rate_seconds": 60
-}
-```
-*(Keunggulan: ESP32 dapat langsung membaca nilai `should_alarm` dan `alarm_type` untuk menyalakan buzzer atau LED merah secara otomatis tanpa perlu hardcode ambang batas).*
-
----
-
-### B. Ambil Konfigurasi SCADA Terbaru (`GET /api/config`)
-Digunakan oleh hardware saat booting atau secara berkala untuk mengambil nilai ambang batas terkini yang diubah oleh admin via dashboard web.
-
-* **Endpoint:** `GET /api/config`
-* **Response (JSON):**
-```json
-{
-  "node_id": "node-kukusan-01",
-  "reference_height": 300,
-  "threshold_siaga": 60,
-  "threshold_bahaya": 90,
-  "sampling_rate_seconds": 60,
-  "status_alat": "Online",
-  "auto_simulation": false,
-  "timestamp": 1725324500000
-}
+# 4. Jalankan development server (Frontend + Backend Express di port 3000)
+npm run dev
 ```
 
----
-
-### C. Heartbeat & Diagnostik Alat (`POST /api/heartbeat`)
-Mengirim sinyal detak jantung berkala dari lapangan (kondisi baterai & kekuatan sinyal Wi-Fi).
-
-* **Endpoint:** `POST /api/heartbeat`
-* **Request Body (JSON):**
-```json
-{
-  "node_id": "node-kukusan-01",
-  "rssi": -65,
-  "battery_pct": 92,
-  "uptime_sec": 3600,
-  "firmware_version": "1.0.0"
-}
-```
+### Script Tersedia
+- `npm run dev` — Menjalankan server pengembangan Express + Vite di `http://localhost:3000`
+- `npm run lint` — Pengecekan tipe TypeScript (`tsc --noEmit`)
+- `npm run build` — Build produksi frontend (`dist/`) dan bundle backend (`dist/server.cjs`)
+- `npm start` — Menjalankan server produksi (`node dist/server.cjs`)
 
 ---
+
+## 🗄️ 7. Koleksi Database (Firebase Firestore)
+
+| Koleksi | Deskripsi |
+|---|---|
+| `sensor_readings` | Deret waktu (*time-series*) pembacaan node sensor (`distance`, `water_level`, `timestamp`, `node_id`, `source`). |
+| `system_config` | Konfigurasi operasional SCADA (`reference_height`, `threshold_siaga`, `threshold_bahaya`, `status_alat`, `sampling_rate_seconds`, `auto_simulation`). |
+| `system_logs` | Log aktivitas, peringatan RTU, dan audit kalibrasi sensor. |
+| `bmkg_forecast` | Cache *snapshot* prakiraan cuaca BMKG (`cuaca`, `curah_hujan`, `kelembapan`, `suhu`). |
+| `predictions` | Rekaman hasil proyeksi elevasi air dan status peringatan dari model LSTM. |
+
+---
+
+## 📡 8. Ringkasan REST API Utama
+
+Dokumentasi lengkap payload & endpoint tersedia di [`backend/README.md`](./backend/README.md) dan [`src/README.md`](./src/README.md).
+
+- `POST /api/telemetry/batch` — Menerima unggahan batch 360 sampel dari node ESP32 WROOM (`LittleFS`).
+- `POST /api/telemetry` (alias `/api/sensor-data`) — Menerima pembacaan sensor tunggal real-time & mengembalikan status alarm.
+- `POST /api/heartbeat` — Laporan status online/offline, RSSI Wi-Fi, baterai, dan *uptime* node.
+- `GET /api/config` — Mengambil konfigurasi ambang batas Siaga/Bahaya dan tinggi referensi terbaru.
+- `POST /api/predict` & `POST /api/lstm-predict` — Inferensi prediksi banjir (Gemini AI & model LSTM terlatih).
+- `GET /api/live-weather` — Mengambil prakiraan cuaca BMKG aktual (dengan mekanisme cache).
+- `POST /api/sim-data` — Injeksi skenario uji simulasi untuk demo dashboard.
+- `GET/POST /api/ciliwung-simulation/*` — Kontrol simulasi 9-node DAS Ciliwung, stream SSE, dan replay hujan 24 jam.
+
+---
+
+> 📄 **Referensi Dokumentasi Subsistem:**  
+> • Frontend Web SCADA: [`src/README.md`](./src/README.md)  
+> • Backend, Cloud & Simulasi Ciliwung: [`backend/README.md`](./backend/README.md)

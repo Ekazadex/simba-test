@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebaseConfig';
 import { playAlertPreviewChime } from '../utils/alarmAudio';
 import { apiUrl } from '../utils/apiBase';
@@ -508,41 +508,85 @@ export default function SCADADashboard({
     }
   };
 
+  const weatherAbortRef = useRef<AbortController | null>(null);
+
   // Fetch genuine live weather directly from official BMKG public API via backend proxy
-  const fetchLiveWeather = async (targetLang: string = language, silent: boolean = false) => {
+  const fetchLiveWeather = async (
+    targetLang: string = language,
+    silent: boolean = false,
+    forceRefresh: boolean = false
+  ) => {
+    weatherAbortRef.current?.abort();
+    const controller = new AbortController();
+    weatherAbortRef.current = controller;
+
     if (!silent) {
       setLoadingWeather(true);
     }
     setWeatherError(null);
+
+    const query = forceRefresh
+      ? `/api/live-weather?lang=${targetLang}&force=1`
+      : `/api/live-weather?lang=${targetLang}`;
+    const maxAttempts = silent ? 2 : 3;
+    let lastError: any = null;
+
     try {
-      const res = await fetch(apiUrl(`/api/live-weather?lang=${targetLang}`), { cache: 'no-store' });
-      const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        throw new Error(
-          targetLang === 'en'
-            ? 'Backend API unreachable (check VITE_API_BASE_URL on Vercel → Railway).'
-            : 'Backend API tidak terjangkau (pastikan VITE_API_BASE_URL di Vercel diarahkan ke domain Railway).'
-        );
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (controller.signal.aborted) return;
+        try {
+          const res = await fetch(apiUrl(query), {
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          const contentType = res.headers.get('content-type') || '';
+          if (!contentType.includes('application/json')) {
+            throw new Error(
+              targetLang === 'en'
+                ? 'Backend API unreachable (check VITE_API_BASE_URL on Vercel → Railway).'
+                : 'Backend API tidak terjangkau (pastikan VITE_API_BASE_URL di Vercel diarahkan ke domain Railway).'
+            );
+          }
+          const data = await res.json();
+          if (!res.ok) {
+            if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxAttempts) {
+              lastError = new Error(data?.error || `HTTP ${res.status}`);
+              await new Promise((r) => window.setTimeout(r, attempt * 1200));
+              continue;
+            }
+            throw new Error(
+              data?.error ||
+                (targetLang === 'en'
+                  ? 'Official BMKG weather API is currently unreachable.'
+                  : 'API prakiraan cuaca resmi BMKG sedang tidak dapat dijangkau.')
+            );
+          }
+          if (!controller.signal.aborted) {
+            setLiveWeather(data);
+            setWeatherError(null);
+          }
+          return;
+        } catch (err: any) {
+          if (controller.signal.aborted || err?.name === 'AbortError') return;
+          lastError = err;
+          if (attempt < maxAttempts) {
+            await new Promise((r) => window.setTimeout(r, attempt * 1200));
+            continue;
+          }
+        }
       }
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || (targetLang === 'en'
-          ? 'Official BMKG weather API is currently unreachable.'
-          : 'API prakiraan cuaca resmi BMKG sedang tidak dapat dijangkau.'));
-      }
-      setLiveWeather(data);
-    } catch (err: any) {
-      console.error('[BMKG] Live weather fetch failed:', err);
+
+      if (controller.signal.aborted) return;
+      console.warn('[BMKG] Live weather fetch unavailable after retries:', lastError?.message || lastError);
       if (!silent) {
-        setLiveWeather(null);
         setWeatherError(
-          err?.message || (targetLang === 'en'
-            ? 'Failed to fetch official BMKG weather data.'
-            : 'Gagal mengambil data cuaca resmi BMKG.')
+          targetLang === 'en'
+            ? 'Official BMKG weather API is temporarily unreachable. Tap Retry to sync again.'
+            : 'API prakiraan cuaca resmi BMKG sedang tidak dapat dijangkau sementara. Klik Muat Ulang untuk mencoba lagi.'
         );
       }
     } finally {
-      if (!silent) {
+      if (!controller.signal.aborted && !silent) {
         setLoadingWeather(false);
       }
     }
@@ -550,11 +594,14 @@ export default function SCADADashboard({
 
   // Run initial weather fetch on dashboard open, refetch when language changes, and auto-sync every 5 minutes
   useEffect(() => {
-    fetchLiveWeather(language, false);
+    fetchLiveWeather(language, false, false);
     const interval = window.setInterval(() => {
-      fetchLiveWeather(language, true);
+      fetchLiveWeather(language, true, false);
     }, 5 * 60 * 1000);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      weatherAbortRef.current?.abort();
+    };
   }, [language]);
 
   // Determine alert status design tokens
@@ -1603,7 +1650,7 @@ export default function SCADADashboard({
                 )}
                 <button
                   id="btn-sync-weather"
-                  onClick={() => fetchLiveWeather(language)}
+                  onClick={() => fetchLiveWeather(language, false, true)}
                   disabled={loadingWeather}
                   className={`p-2 rounded-lg border transition-all cursor-pointer shrink-0 ${isDark ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'}`}
                   title={language === 'en' ? 'Refresh Official BMKG Data' : 'Muat Ulang Data Resmi BMKG'}
@@ -1792,7 +1839,7 @@ export default function SCADADashboard({
                 : 'Data prakiraan cuaca resmi BMKG sedang tidak tersedia.')}
             </span>
             <button
-              onClick={() => fetchLiveWeather(language)}
+              onClick={() => fetchLiveWeather(language, false, true)}
               className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-semibold border transition-colors cursor-pointer ${
                 isDark
                   ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-200'
